@@ -42,6 +42,9 @@ def build(
     download_vm: Annotated[
         list[str] | None, typer.Option(help="VM flavors to download at build time")
     ] = None,
+    skip_os_install: Annotated[
+        bool, typer.Option(help="Run disk setup only; skip Proxmox install (for testing)")
+    ] = False,
 ) -> None:
     validate_disk_path(disk)
 
@@ -69,17 +72,20 @@ def build(
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
-    steps = [
+    disk_steps = [
         ("Partitioning SSD", lambda: partitioner.create_partition_table(layout)),
         ("Creating LUKS2 container", lambda: _setup_luks(layout, cfg)),
         ("Setting up LVM", lambda: _setup_lvm(layout)),
         ("Formatting Btrfs data partition", lambda: _setup_btrfs(layout)),
         ("Formatting exFAT share", lambda: _setup_exfat(layout)),
+    ]
+    os_steps = [
         ("Installing Proxmox VE", lambda: _install_proxmox(layout)),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
+    steps = disk_steps if skip_os_install else disk_steps + os_steps
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
         for description, step_fn in steps:
@@ -92,9 +98,14 @@ def build(
                 raise typer.Exit(1) from e
             progress.update(task, description=f"[green]✓[/green] {description}", completed=True)
 
-    console.print("\n[bold green]PHermes SSD ready.[/bold green]")
-    console.print("Safely eject and boot the target machine.")
-    console.print("Connect from any browser: [bold]https://phermes.local[/bold]")
+    if skip_os_install:
+        console.print("\n[bold yellow]Disk setup complete.[/bold yellow]")
+        console.print("Partitions, LUKS2, LVM, and Btrfs are ready.")
+        console.print("Re-run without [bold]--skip-os-install[/bold] to install Proxmox VE.")
+    else:
+        console.print("\n[bold green]PHermes SSD ready.[/bold green]")
+        console.print("Safely eject and boot the target machine.")
+        console.print("Connect from any browser: [bold]https://phermes.local[/bold]")
 
 
 def _setup_luks(layout, cfg: BuildConfig) -> None:
