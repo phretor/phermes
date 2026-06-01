@@ -86,13 +86,11 @@ def build(
             task = progress.add_task(description)
             try:
                 step_fn()
-                progress.update(task, description=f"[green]✓[/green] {description}")
             except CommandError as e:
                 progress.stop()
                 console.print(f"[red]✗ {description} failed:[/red] {e}")
                 raise typer.Exit(1) from e
-            finally:
-                progress.remove_task(task)
+            progress.update(task, description=f"[green]✓[/green] {description}", completed=True)
 
     console.print("\n[bold green]PHermes SSD ready.[/bold green]")
     console.print("Safely eject and boot the target machine.")
@@ -109,12 +107,13 @@ def _setup_lvm(layout) -> None:
     mapper = luks.mapper_path(LUKS_NAME)
     lvm.setup_lvm(mapper, layout.lvm_gb)
     proxmox.format_root_lv("/dev/pve/root")
+    lvm.create_btrfs_lv("pve", layout.data_gb)
 
 
 def _setup_btrfs(layout) -> None:
-    data_part = f"/dev/mapper/{LUKS_NAME}_data"
-    btrfs.format_btrfs(data_part)
-    btrfs.mount_btrfs(data_part, DATA_MOUNT)
+    data_dev = f"/dev/pve/{lvm.BTRFS_LV_NAME}"
+    btrfs.format_btrfs(data_dev)
+    btrfs.mount_btrfs(data_dev, DATA_MOUNT)
     btrfs.create_subvolumes(DATA_MOUNT)
 
 

@@ -48,6 +48,14 @@ def test_create_thin_volume(monkeypatch):
     assert any("--thin" in c or "-T" in str(c) for c in calls)
 
 
+def test_create_btrfs_lv(monkeypatch):
+    calls = _capture(monkeypatch)
+    path = lvm_mod.create_btrfs_lv("pve", data_gb=330)
+    assert any("lvcreate" in c[0] for c in calls)
+    assert any("btrfs-data" in str(c) for c in calls)
+    assert path == "/dev/pve/btrfs-data"
+
+
 def test_setup_lvm_calls_all_steps(monkeypatch):
     calls = _capture(monkeypatch)
     result = lvm_mod.setup_lvm("/dev/mapper/phermes_luks", total_lvm_gb=400)

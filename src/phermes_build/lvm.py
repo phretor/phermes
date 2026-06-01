@@ -33,6 +33,14 @@ def create_thin_volume(vg_name: str, pool_name: str, vol_name: str, size_gb: int
     return f"/dev/{vg_name}/{vol_name}"
 
 
+BTRFS_LV_NAME = "btrfs-data"
+
+
+def create_btrfs_lv(vg_name: str, data_gb: int) -> str:
+    run_cmd(["lvcreate", "-L", f"{data_gb}G", "-n", BTRFS_LV_NAME, vg_name])
+    return f"/dev/{vg_name}/{BTRFS_LV_NAME}"
+
+
 def setup_lvm(mapper_device: str, total_lvm_gb: int, vg_name: str = "pve") -> dict[str, str]:
     sizes = compute_lvm_sizes(total_lvm_gb)
     create_pv(mapper_device)
