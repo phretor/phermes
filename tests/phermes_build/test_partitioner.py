@@ -1,6 +1,5 @@
-from phermes_build.models import DiskLayout
 from phermes_build import partitioner as part_mod
-
+from phermes_build.models import DiskLayout
 
 LAYOUT_1TB = DiskLayout(
     disk="/dev/sdb",
@@ -26,13 +25,13 @@ def test_sfdisk_script_contains_efi_partition():
 
 def test_sfdisk_script_four_partitions_with_share():
     script = part_mod._build_sfdisk_script(LAYOUT_1TB)
-    lines = [l for l in script.splitlines() if l.startswith(",") or "size=" in l]
+    lines = [ln for ln in script.splitlines() if ln.startswith(",") or "size=" in ln]
     assert len(lines) == 4
 
 
 def test_sfdisk_script_three_partitions_without_share():
     script = part_mod._build_sfdisk_script(LAYOUT_NO_SHARE)
-    lines = [l for l in script.splitlines() if l.startswith(",") or "size=" in l]
+    lines = [ln for ln in script.splitlines() if ln.startswith(",") or "size=" in ln]
     assert len(lines) == 3
 
 

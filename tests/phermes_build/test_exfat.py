@@ -1,4 +1,3 @@
-import pytest
 from phermes_build import exfat as exfat_mod
 
 

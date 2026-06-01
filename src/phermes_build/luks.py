@@ -1,4 +1,4 @@
-from phermes_build.runner import CommandError, run_cmd
+from phermes_build.runner import run_cmd
 
 LUKS_NAME = "phermes_luks"
 
