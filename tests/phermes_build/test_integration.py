@@ -3,11 +3,13 @@
 Run with: sudo uv run pytest -m integration -v
 """
 import subprocess
+
 import pytest
-from phermes_build.disk import disk_size_gb, validate_disk
-from phermes_build.partitioner import create_partition_table, partition_path
+
+from phermes_build.disk import disk_size_gb
+from phermes_build.luks import close_luks, format_luks, open_luks
 from phermes_build.models import DiskLayout
-from phermes_build.luks import format_luks, open_luks, close_luks, mapper_path
+from phermes_build.partitioner import create_partition_table
 
 
 @pytest.fixture(scope="module")

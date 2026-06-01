@@ -5,7 +5,9 @@ def pytest_collection_modifyitems(config, items):
     """Skip integration tests unless -m integration is explicitly passed."""
     if config.option.markexpr and "integration" in config.option.markexpr:
         return
-    skip_integration = pytest.mark.skip(reason="integration tests require root; run with -m integration")
+    skip_integration = pytest.mark.skip(
+        reason="integration tests require root; run with -m integration"
+    )
     for item in items:
         if item.get_closest_marker("integration"):
             item.add_marker(skip_integration)
