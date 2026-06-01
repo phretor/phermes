@@ -1,7 +1,7 @@
 # PHermes
 
 **Personal Hermes** — a fully encrypted, self-hosted, portable AI orchestration appliance.
-Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](https://github.com/NousResearch/hermes-agent) environment is ready.
+Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](https://github.com/NousResearch/hermes-agent) environment is ready. Still want to host it in the cloud? Import the disk volume into your favorite cloud provider's stack.
 
 ---
 
@@ -49,6 +49,7 @@ Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](
 PHermes packages Hermes Agent inside a QEMU/KVM virtual machine (macOS by default,
 Windows and Linux also supported) running on a Proxmox VE host. The entire stack lives
 on a single SSD. No cloud. No installation on the host. Unplug and take it anywhere.
+Still want to host it in the cloud? Import the disk volume into your favorite cloud provider's stack.
 
 **Boot chain:** `EFI → GRUB → Proxmox VE → QEMU/KVM VM → Hermes`
 
@@ -103,7 +104,9 @@ Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superp
 ## Hardware requirements
 
 - Any x86-64 machine with KVM support (Intel VT-x or AMD-V)
-- ≥32 GB RAM recommended (16 GB minimum)
+- RAM depends on the guest OS:
+  - macOS or Windows VM: ≥16 GB (32 GB recommended)
+  - Console-only Linux VM: ≥8 GB
 - ≥500 GB SSD (1 TB recommended; 2 TB+ for large knowledge bases)
 
 ## Distribution
