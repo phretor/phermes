@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from phermes_build import vm as vm_mod
 from phermes_build.models import AcquisitionMode, VMConfig, VMFlavor
 
@@ -46,3 +48,21 @@ def test_proxmox_vm_config_macos():
 def test_proxmox_vm_config_windows():
     conf = vm_mod.proxmox_vm_config(VMFlavor.WINDOWS, vm_id=101, disk_gb=100)
     assert "q35" in conf
+
+
+def test_proxmox_vm_config_macos_specific():
+    conf = vm_mod.proxmox_vm_config(VMFlavor.MACOS, vm_id=100, disk_gb=120)
+    assert "vmxnet3" in conf
+    assert "Penryn" in conf
+
+
+def test_proxmox_vm_config_non_macos_virtio():
+    conf = vm_mod.proxmox_vm_config(VMFlavor.WINDOWS, vm_id=101, disk_gb=100)
+    assert "virtio" in conf
+
+
+def test_import_vm_raises_for_non_import_mode(monkeypatch):
+    _capture(monkeypatch)
+    cfg = VMConfig(flavor=VMFlavor.MACOS, mode=AcquisitionMode.SKIP)
+    with pytest.raises(ValueError, match="mode=IMPORT"):
+        vm_mod.import_vm(cfg, vm_id=100)

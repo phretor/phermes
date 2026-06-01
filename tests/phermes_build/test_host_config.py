@@ -47,3 +47,9 @@ def test_proxmox_rbac_commands_create_restricted_user(monkeypatch):
     cmd_strings = [" ".join(c) for c in calls]
     assert any("pveum" in s for s in cmd_strings)
     assert any("alice" in s for s in cmd_strings)
+
+
+def test_avahi_service_config():
+    conf = hc.avahi_service_config()
+    assert "_https._tcp" in conf
+    assert "_smb._tcp" in conf
