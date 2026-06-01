@@ -46,3 +46,15 @@ def test_create_thin_volume(monkeypatch):
     lvm_mod.create_thin_volume("pve", pool_name="data", vol_name="vm-100-disk-0", size_gb=120)
     assert any("lvcreate" in c[0] for c in calls)
     assert any("--thin" in c or "-T" in str(c) for c in calls)
+
+
+def test_setup_lvm_calls_all_steps(monkeypatch):
+    calls = _capture(monkeypatch)
+    result = lvm_mod.setup_lvm("/dev/mapper/phermes_luks", total_lvm_gb=400)
+    cmd_names = [c[0] for c in calls]
+    assert "pvcreate" in cmd_names
+    assert "vgcreate" in cmd_names
+    assert "lvcreate" in cmd_names
+    assert result["vg"] == "pve"
+    assert "root_lv" in result
+    assert "thin_pool" in result

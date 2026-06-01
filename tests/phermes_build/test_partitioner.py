@@ -41,6 +41,7 @@ def test_create_partition_table_calls_sfdisk(monkeypatch):
     part_mod.create_partition_table(LAYOUT_1TB)
     assert any(c[0] == "sfdisk" for c in calls)
     assert any("/dev/sdb" in c for c in calls)
+    assert any("udevadm" in c[0] for c in calls)
 
 
 def test_partition_path():

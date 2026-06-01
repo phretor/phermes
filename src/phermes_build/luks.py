@@ -8,6 +8,7 @@ def mapper_path(name: str) -> str:
 
 
 def format_luks(device: str, passphrase: str, name: str = LUKS_NAME) -> None:
+    # name is accepted for API symmetry with open_luks but unused by luksFormat
     run_cmd(
         ["cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file", "-", device],
         input=passphrase,

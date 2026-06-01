@@ -40,3 +40,10 @@ def test_mount_btrfs(monkeypatch):
     btrfs_mod.mount_btrfs("/dev/sdb4", "/mnt/data")
     assert any("mount" in c[0] for c in calls)
     assert any("btrfs" in str(c) for c in calls)
+
+
+def test_unmount(monkeypatch):
+    calls = _capture(monkeypatch)
+    btrfs_mod.unmount("/mnt/data")
+    assert any("umount" in c[0] for c in calls)
+    assert any("/mnt/data" in c for c in calls)

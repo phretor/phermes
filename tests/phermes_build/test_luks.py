@@ -39,3 +39,25 @@ def test_close_luks_calls_luksclose(monkeypatch):
 
 def test_mapper_path():
     assert luks_mod.mapper_path("phermes_data") == "/dev/mapper/phermes_data"
+
+
+def test_add_passphrase(monkeypatch):
+    received = {}
+
+    def fake_run(cmd, *, input=None, check=True):
+        received.setdefault("cmds", []).append(cmd)
+        received["input"] = input
+        return ""
+
+    monkeypatch.setattr(luks_mod, "run_cmd", fake_run)
+    luks_mod.add_passphrase("/dev/sdb3", "old-pass", "new-pass")
+    assert any("luksAddKey" in c for c in received["cmds"])
+    assert "old-pass" in received["input"]
+    assert "new-pass" in received["input"]
+
+
+def test_remove_passphrase(monkeypatch):
+    calls = []
+    monkeypatch.setattr(luks_mod, "run_cmd", lambda cmd, **kw: calls.append(cmd) or "")
+    luks_mod.remove_passphrase("/dev/sdb3", "old-pass")
+    assert any("luksRemoveKey" in c for c in calls)
