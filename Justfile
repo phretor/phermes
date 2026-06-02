@@ -38,11 +38,8 @@ docker-build:
     docker build -t phermes-build .
 
 # Run phermes-build via Docker against a real block device: just docker-run /dev/sdX
-#
-# -v /dev:/dev shares the host device tree so partition nodes created during
-# the run (sdX1, loop0p1, ...) are visible inside the container. --privileged
-# is required for cryptsetup, LVM, and mount.
 docker-run disk:
+    # -v /dev:/dev shares the host device tree so partition nodes are visible; --privileged for cryptsetup/LVM/mount
     sudo docker run --rm --privileged -v /dev:/dev phermes-build {{disk}}
 
 # ── Smoke testing (loop device) ───────────────────────────────────────────────
@@ -111,13 +108,20 @@ smoke-inspect:
     echo "=== Btrfs ==="
     sudo btrfs filesystem show 2>/dev/null || echo "(no Btrfs volumes)"
 
-# Tear down smoke session: close LUKS, remove LVM, detach loop device, delete image
+# Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Teardown is the reverse of setup: the pve VG sits on the LUKS mapping, which
+    # sits on the loop partition. Closing LUKS before deactivating the VG fails
+    # ("device in use"), so order matters. The VG is removed only when it actually
+    # sits on our phermes_luks device — this never touches a real pve VG.
     DISK=$(cat {{_smoke_state}} 2>/dev/null || true)
+    if sudo vgs --noheadings -o pv_name pve 2>/dev/null | grep -q phermes_luks; then
+        sudo vgchange -an pve >/dev/null 2>&1 || true
+        sudo vgremove -f pve >/dev/null 2>&1 || true
+    fi
     sudo cryptsetup luksClose phermes_luks 2>/dev/null || true
-    sudo vgremove -f pve 2>/dev/null || true
     [ -n "$DISK" ] && sudo losetup -d "$DISK" 2>/dev/null || true
     rm -f {{_smoke_image}} {{_smoke_state}}
     echo "Done."
