@@ -144,17 +144,57 @@ phermes-build /dev/sdX --share-size 500G --share-encrypted
 Bundles the full toolchain — no local dependencies required beyond Docker:
 
 ```bash
+# Pre-load the kernel targets the container can't modprobe itself
+sudo modprobe dm-thin-pool dm-crypt btrfs vfat
+
 sudo docker run --rm --privileged \
-  --device=/dev/sdX \
+  -v /dev:/dev \
   ghcr.io/phretor/phermes-build \
   /dev/sdX
 ```
 
-> **Note:** Docker device passthrough only works on Linux hosts. Docker Desktop on macOS
+`-v /dev:/dev` shares the host device tree so the partition nodes created during the
+build are visible inside the container. The container shares the host kernel but cannot
+load modules itself, so the device-mapper and filesystem targets must be present on the
+host first. `just docker-run /dev/sdX` wraps both steps.
+
+> **Note:** Docker device sharing only works on Linux hosts. Docker Desktop on macOS
 > and Windows does not surface host block devices into containers.
 
 > **macOS note:** macOS VMs may only be run on Apple hardware under the macOS EULA.
 > PHermes does not distribute macOS images; users supply their own installer.
+
+## Development
+
+[`just`](https://github.com/casey/just) drives every common task (`just --list` for the
+full set). Unit tests need no root and run on any OS; everything else is Linux-only.
+
+```bash
+just install          # uv sync
+just test             # unit tests (no root, any OS)
+just check            # lint + typecheck + unit tests (pre-commit gate)
+just docker-build     # build the phermes-build image
+```
+
+### Smoke testing on a virtual disk
+
+The build runs end-to-end against a sparse file attached as a loop device — no real
+hardware required. The recipes manage the loop device, kernel modules, and teardown:
+
+```bash
+just smoke-create     # 500G sparse image at /tmp/phermes-smoke.img + loop device
+just smoke-run        # disk setup only (partition/LUKS/LVM/Btrfs), ~seconds
+just smoke-full       # full build including Proxmox install
+just smoke-inspect    # lsblk + LVM + Btrfs state
+just smoke-verify     # mount every partition and assert expected content
+just smoke-shell      # interactive shell in the build container
+just smoke-clean      # tear down and delete the image
+```
+
+`smoke-run` / `smoke-full` use Docker by default; pass `native=1` to run `phermes-build`
+directly. The active loop device is recorded in `.smoke`. Always `smoke-clean` before a
+fresh `smoke-create`. `smoke-verify` exits non-zero if any partition check fails, so it
+doubles as a CI-style gate.
 
 ## License
 
