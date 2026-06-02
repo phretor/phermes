@@ -45,14 +45,19 @@ if ! "${docker[@]}" image inspect phermes-qemu >/dev/null 2>&1; then
   "${docker[@]}" build -f Dockerfile.qemu -t phermes-qemu .
 fi
 
-# Pass /dev/kvm through when the host has it so QEMU accelerates; without it the
-# container falls back to TCG automatically.
-kvm_args=()
-[ -e /dev/kvm ] && kvm_args=(--device /dev/kvm)
+# Run QEMU as the invoking user, not container-root, so the process is
+# unprivileged and killable on the host. --init gives a real PID 1 that reaps
+# and forwards signals, so Ctrl-C tears the container down cleanly.
+run_args=(--rm --init -p 5900:5900 --user "$(id -u):$(id -g)")
+
+# Pass /dev/kvm through when present so QEMU accelerates; grant its group to the
+# non-root container user so it can open the device. Without it: TCG.
+if [ -e /dev/kvm ]; then
+  run_args+=(--device /dev/kvm --group-add "$(stat -c '%g' /dev/kvm)")
+fi
 
 echo "Booting in Docker — connect a VNC viewer to localhost:5900"
-exec "${docker[@]}" run --rm -p 5900:5900 \
-  "${kvm_args[@]}" \
+exec "${docker[@]}" run "${run_args[@]}" \
   -e QEMU_VNC=0.0.0.0:0 \
   -v "$IMAGE:/image.img:ro" \
   phermes-qemu /image.img

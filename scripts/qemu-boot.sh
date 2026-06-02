@@ -92,4 +92,9 @@ if [ "${accel%% *}" = "KVM" ]; then
   echo "Host nested virtualization: $nested (inner Proxmox VMs accelerate only when enabled)"
 fi
 echo "Booting $IMAGE under OVMF. LUKS passphrase: phermes-change-me"
-qemu-system-x86_64 "${args[@]}"
+# Run QEMU in the background and forward termination signals so Ctrl-C (or
+# `docker stop`) tears it down cleanly instead of orphaning it.
+qemu-system-x86_64 "${args[@]}" &
+qemu_pid=$!
+trap 'kill -TERM "$qemu_pid" 2>/dev/null || true' INT TERM
+wait "$qemu_pid"
