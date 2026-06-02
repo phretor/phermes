@@ -23,33 +23,29 @@ Full design: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superp
 
 ## Development commands
 
+Use `just` for all common tasks (`just --list` shows everything):
+
 ```bash
-# Install deps
-uv sync
+just install          # uv sync
+just test             # unit tests (no root, any OS)
+just test-one <pat>   # single test file or pattern
+just test-integration # integration tests (root + loop device, Linux only)
+just check            # lint + typecheck + test (pre-commit gate)
+just lint             # ruff check
+just typecheck        # ty check
 
-# Run tests (unit only — no root required, works on any OS)
-uv run pytest -q
+just docker-build     # build phermes-build Docker image
+just docker-run /dev/sdX  # run via Docker against a real device
 
-# Run a single test
-uv run pytest tests/phermes_build/test_disk.py::test_compute_layout_1tb -v
-
-# Run integration tests (requires root + loop device, Linux only)
-sudo uv run pytest -m integration -v
-
-# Lint and type check
-uv run ruff check src/ tests/
-uv run ty check src/
-
-# Install CLI locally
-uv pip install -e .
-phermes-build --help
-
-# Build Docker image
-docker build -t phermes-build .
-
-# Run via Docker (Linux host, block device must be visible to host kernel)
-sudo docker run --rm --privileged --device=/dev/sdX phermes-build /dev/sdX
+just smoke-create     # create 500G sparse image + attach loop device
+just smoke-run        # disk setup only, Docker by default
+just smoke-run native=1  # disk setup, native phermes-build
+just smoke-full       # full Proxmox install, Docker by default
+just smoke-inspect    # show lsblk / LVM / Btrfs state
+just smoke-clean      # tear down session + delete image
 ```
+
+Loop device state is stored in `.smoke` (gitignored). Always run `smoke-clean` before a fresh `smoke-create`.
 
 ## CI/CD
 
