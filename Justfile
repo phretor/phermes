@@ -18,7 +18,7 @@ test-one pattern:
 
 # Run integration tests (requires root + loop device, Linux only)
 test-integration:
-    sudo --preserve-env=PATH uv run pytest -m integration -v
+    sudo $(which uv) run pytest -m integration -v
 
 # Lint
 lint:
