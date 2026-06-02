@@ -29,4 +29,4 @@ jobs:
             cryptsetup lvm2 btrfs-progs exfatprogs dosfstools util-linux
 
       - name: Integration tests
-        run: sudo --preserve-env=PATH uv run pytest -m integration -v
+        run: sudo $(which uv) run pytest -m integration -v
