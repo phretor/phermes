@@ -59,6 +59,27 @@ args=(
   -snapshot
 )
 
+# Acceleration: prefer KVM, fall back to TCG when /dev/kvm is absent or not
+# writable. -cpu host is only valid with KVM, so the two are added together.
+if [ -w /dev/kvm ]; then
+  args+=(-enable-kvm -cpu host)
+  accel="KVM (accelerated)"
+else
+  accel="TCG (emulated — no accessible /dev/kvm)"
+fi
+
+# Report whether the guest will see nested vmx/svm — needed for the inner
+# Proxmox VMs to accelerate. Informational only.
+nested="unknown"
+for p in /sys/module/kvm_intel/parameters/nested /sys/module/kvm_amd/parameters/nested; do
+  [ -r "$p" ] || continue
+  case "$(cat "$p" 2>/dev/null)" in
+  Y | 1) nested="enabled" ;;
+  N | 0) nested="disabled" ;;
+  esac
+  break
+done
+
 if [ "$DISPLAY_MODE" = "window" ]; then
   echo "QEMU: graphical window"
 else
@@ -66,5 +87,9 @@ else
   echo "QEMU: VNC on display :0 (port 5900)"
 fi
 
-echo "Booting $IMAGE under OVMF (TCG, no KVM). LUKS passphrase: phermes-change-me"
+echo "Acceleration: $accel"
+if [ "${accel%% *}" = "KVM" ]; then
+  echo "Host nested virtualization: $nested (inner Proxmox VMs accelerate only when enabled)"
+fi
+echo "Booting $IMAGE under OVMF. LUKS passphrase: phermes-change-me"
 qemu-system-x86_64 "${args[@]}"

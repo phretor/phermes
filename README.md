@@ -195,7 +195,13 @@ just smoke-clean      # tear down and delete the image
 `smoke-qemu` boots the built disk in QEMU through a small dedicated container
 (`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over
 VNC on `localhost:5900`. Pass `native=1` to run QEMU directly on the host instead (opens
-a graphical window when `$DISPLAY` is set). TCG emulation is used, so KVM is not required.
+a graphical window when `$DISPLAY` is set).
+
+It uses **KVM acceleration when `/dev/kvm` is available** and falls back to TCG emulation
+automatically when it isn't — so KVM is never required, just used when present. If the
+host has nested virtualization enabled (`kvm_intel`/`kvm_amd nested=1`) and `-cpu host`
+exposes `vmx`/`svm`, the inner Proxmox VMs can accelerate too; otherwise only the PHermes
+host itself is accelerated.
 
 `smoke-run` / `smoke-full` use Docker by default; pass `native=1` to run `phermes-build`
 directly. The active loop device is recorded in `.smoke`. Always `smoke-clean` before a
