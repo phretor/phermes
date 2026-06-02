@@ -2,6 +2,10 @@
 # Boot the smoke image in QEMU under OVMF. Docker by default (no host QEMU or
 # OVMF install needed); native=1 runs QEMU directly on the host.
 #
+# QEMU needs no elevated privileges. Native mode runs entirely as your user.
+# Docker mode runs QEMU unprivileged inside the container — the only root is
+# Docker-daemon access (sudo, or membership in the docker group).
+#
 # The actual QEMU launch lives in qemu-boot.sh, shared between native mode and
 # the phermes-qemu container so the boot configuration stays in one place.
 set -euo pipefail
@@ -14,13 +18,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
   echo "error: image not found: $IMAGE (run 'just smoke-create' first)" >&2
   exit 1
 }
-
-# Quiesce the host so QEMU reads a consistent disk: deactivate any pve VG and
-# close the LUKS mapping sitting on this image. -snapshot never writes it anyway.
-sudo vgchange -an --config 'activation { udev_sync = 0 udev_rules = 0 }' pve >/dev/null 2>&1 || true
-sudo cryptsetup luksClose phermes_luks 2>/dev/null || true
-# The image is root-owned after the build; -snapshot only reads it.
-sudo chmod a+r "$IMAGE"
+# No host teardown needed: -snapshot opens the image read-only, so the build's
+# LUKS/LVM mappings can stay active. If a previous build left the image
+# mid-write, run 'just smoke-clean' and rebuild first.
 
 if [ "$NATIVE" = "1" ]; then
   if [ -n "${DISPLAY:-}" ]; then
@@ -31,10 +31,18 @@ if [ "$NATIVE" = "1" ]; then
   exec bash "$HERE/qemu-boot.sh" "$IMAGE"
 fi
 
+# Reach the Docker daemon without sudo when the user is in the docker group,
+# falling back to sudo otherwise — QEMU itself needs no root.
+if docker info >/dev/null 2>&1; then
+  docker=(docker)
+else
+  docker=(sudo docker)
+fi
+
 # Docker mode: build the lean qemu image on first use, then boot with VNC.
-if ! sudo docker image inspect phermes-qemu >/dev/null 2>&1; then
+if ! "${docker[@]}" image inspect phermes-qemu >/dev/null 2>&1; then
   echo "Building phermes-qemu image (first run)…"
-  sudo docker build -f Dockerfile.qemu -t phermes-qemu .
+  "${docker[@]}" build -f Dockerfile.qemu -t phermes-qemu .
 fi
 
 # Pass /dev/kvm through when the host has it so QEMU accelerates; without it the
@@ -43,7 +51,7 @@ kvm_args=()
 [ -e /dev/kvm ] && kvm_args=(--device /dev/kvm)
 
 echo "Booting in Docker — connect a VNC viewer to localhost:5900"
-exec sudo docker run --rm -p 5900:5900 \
+exec "${docker[@]}" run --rm -p 5900:5900 \
   "${kvm_args[@]}" \
   -e QEMU_VNC=0.0.0.0:0 \
   -v "$IMAGE:/image.img:ro" \

@@ -203,6 +203,11 @@ host has nested virtualization enabled (`kvm_intel`/`kvm_amd nested=1`) and `-cp
 exposes `vmx`/`svm`, the inner Proxmox VMs can accelerate too; otherwise only the PHermes
 host itself is accelerated.
 
+Unlike the build, `smoke-qemu` needs **no root**: QEMU runs as your user (native) or
+unprivileged in the container (Docker), reading the image read-only via `-snapshot`. The
+only privileged dependency is Docker-daemon access in Docker mode — and it skips `sudo`
+when you're in the `docker` group.
+
 `smoke-run` / `smoke-full` use Docker by default; pass `native=1` to run `phermes-build`
 directly. The active loop device is recorded in `.smoke`. Always `smoke-clean` before a
 fresh `smoke-create`. `smoke-verify` exits non-zero if any partition check fails, so it
