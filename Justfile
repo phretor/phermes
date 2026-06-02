@@ -120,6 +120,20 @@ smoke-inspect:
     echo "=== Btrfs ==="
     sudo btrfs filesystem show 2>/dev/null || echo "(no Btrfs volumes)"
 
+# Open an interactive shell in the build container (all tools, host /dev shared)
+smoke-shell:
+    sudo docker run --rm -it --privileged -v /dev:/dev --entrypoint /bin/bash phermes-build
+
+# Mount every partition in a container and assert expected content (pass/fail)
+smoke-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -f {{_smoke_state}} ] || { echo "error: no active smoke session." >&2; exit 1; }
+    DISK=$(cat {{_smoke_state}})
+    sudo docker run --rm --privileged -v /dev:/dev \
+        -v "$PWD/scripts/smoke-verify.sh:/verify.sh:ro" \
+        --entrypoint /bin/bash phermes-build /verify.sh "$DISK"
+
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:
     #!/usr/bin/env bash
