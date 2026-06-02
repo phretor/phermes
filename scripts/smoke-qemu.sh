@@ -57,7 +57,11 @@ if [ -e /dev/kvm ]; then
 fi
 
 echo "Booting in Docker — connect a VNC viewer to localhost:5900"
+# qemu-boot.sh is bind-mounted (not baked) so the running logic always matches
+# the working tree — no image rebuild needed when the script changes.
 exec "${docker[@]}" run "${run_args[@]}" \
   -e QEMU_VNC=0.0.0.0:0 \
   -v "$IMAGE:/image.img:ro" \
-  phermes-qemu /image.img
+  -v "$HERE/qemu-boot.sh:/qemu-boot.sh:ro" \
+  --entrypoint bash \
+  phermes-qemu /qemu-boot.sh /image.img
