@@ -9,7 +9,7 @@ from phermes_build import btrfs, exfat, host_config, luks, lvm, partitioner, pro
 from phermes_build.disk import compute_layout
 from phermes_build.firstboot import write_firstboot_flag, write_motd
 from phermes_build.models import AcquisitionMode, BuildConfig, VMConfig, VMFlavor
-from phermes_build.runner import CommandError, run_cmd
+from phermes_build.runner import CommandError, run_cmd, set_verbose
 
 app = typer.Typer(name="phermes-build", help="PHermes SSD appliance builder")
 console = Console()
@@ -45,8 +45,12 @@ def build(
     skip_os_install: Annotated[
         bool, typer.Option(help="Run disk setup only; skip Proxmox install (for testing)")
     ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Stream every command's output live")
+    ] = False,
 ) -> None:
     validate_disk_path(disk)
+    set_verbose(verbose)
 
     cfg = BuildConfig(
         disk=disk,
@@ -87,16 +91,10 @@ def build(
     ]
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
-        for description, step_fn in steps:
-            task = progress.add_task(description)
-            try:
-                step_fn()
-            except CommandError as e:
-                progress.stop()
-                console.print(f"[red]✗ {description} failed:[/red] {e}")
-                raise typer.Exit(1) from e
-            progress.update(task, description=f"[green]✓[/green] {description}", completed=True)
+    if verbose:
+        _run_steps_verbose(steps)
+    else:
+        _run_steps_progress(steps)
 
     if skip_os_install:
         console.print("\n[bold yellow]Disk setup complete.[/bold yellow]")
@@ -106,6 +104,35 @@ def build(
         console.print("\n[bold green]PHermes SSD ready.[/bold green]")
         console.print("Safely eject and boot the target machine.")
         console.print("Connect from any browser: [bold]https://phermes.local[/bold]")
+
+
+def _run_steps_progress(steps) -> None:
+    with Progress(
+        SpinnerColumn(), TextColumn("{task.description}"), console=console
+    ) as progress:
+        for description, step_fn in steps:
+            task = progress.add_task(description)
+            try:
+                step_fn()
+            except CommandError as e:
+                progress.stop()
+                console.print(f"[red]✗ {description} failed:[/red] {e}")
+                raise typer.Exit(1) from e
+            progress.update(
+                task, description=f"[green]✓[/green] {description}", completed=True
+            )
+
+
+def _run_steps_verbose(steps) -> None:
+    """Run steps with plain headers and live command output (no spinner)."""
+    for description, step_fn in steps:
+        console.print(f"[bold cyan]==>[/bold cyan] {description}")
+        try:
+            step_fn()
+        except CommandError as e:
+            console.print(f"[red]✗ {description} failed:[/red] {e}")
+            raise typer.Exit(1) from e
+        console.print(f"[green]✓[/green] {description}")
 
 
 def _setup_luks(layout, cfg: BuildConfig) -> None:

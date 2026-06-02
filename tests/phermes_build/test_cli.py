@@ -84,6 +84,21 @@ def test_full_install_runs_all_steps(monkeypatch):
     assert all(s in called for s in ["luks", "lvm", "btrfs", "proxmox", "host", "firstboot"])
 
 
+def test_verbose_runs_all_steps_and_sets_flag(monkeypatch):
+    """--verbose runs the same steps (no spinner) and enables streaming."""
+    import phermes_build.cli as cli_mod
+
+    seen: list = []
+    monkeypatch.setattr(cli_mod, "set_verbose", lambda v: seen.append(("verbose", v)))
+    called: list = []
+    _patch_all_steps(monkeypatch, called)
+
+    result = runner.invoke(app, ["/dev/sdb", "--verbose"])
+    assert result.exit_code == 0
+    assert ("verbose", True) in seen
+    assert all(s in called for s in ["luks", "lvm", "btrfs", "proxmox", "host", "firstboot"])
+
+
 def _fake_layout():
     from phermes_build.models import DiskLayout
     return DiskLayout(disk="/dev/sdb", disk_size_gb=1000, lvm_gb=400, data_gb=333, share_gb=0)

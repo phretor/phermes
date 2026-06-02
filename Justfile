@@ -88,21 +88,21 @@ smoke-run native="0":
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0 --skip-os-install
+        sudo phermes-build "$DISK" --share-size 0 --skip-os-install --verbose
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --skip-os-install
+        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --skip-os-install --verbose
     fi
 
-# Full Proxmox install. Docker by default; override with native=1
+# Full Proxmox install (verbose). Docker by default; override with native=1
 smoke-full native="0":
     #!/usr/bin/env bash
     set -euo pipefail
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0
+        sudo phermes-build "$DISK" --share-size 0 --verbose
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0
+        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --verbose
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk
