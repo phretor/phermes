@@ -39,6 +39,12 @@ docker-build:
 
 # Run phermes-build via Docker against a real block device: just docker-run /dev/sdX
 docker-run disk:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Pre-load kernel targets the container can't modprobe itself
+    for m in dm-mod dm-crypt dm-thin-pool btrfs vfat; do
+        sudo modprobe "$m" 2>/dev/null || true
+    done
     # -v /dev:/dev shares the host device tree so partition nodes are visible; --privileged for cryptsetup/LVM/mount
     sudo docker run --rm --privileged -v /dev:/dev phermes-build {{disk}}
 
@@ -64,6 +70,12 @@ smoke-create:
         echo "error: smoke session already active ($(cat {{_smoke_state}})). Run 'just smoke-clean' first." >&2
         exit 1
     fi
+    # The container shares the host kernel but can't modprobe (no module files
+    # for the host kernel inside it). Pre-load every target the build needs:
+    # dm-thin-pool (LVM thin), dm-crypt (LUKS), btrfs and vfat (mounts).
+    for m in dm-mod dm-crypt dm-thin-pool btrfs vfat; do
+        sudo modprobe "$m" 2>/dev/null || true
+    done
     truncate -s 500G {{_smoke_image}}
     DISK=$(sudo losetup --find --show --partscan {{_smoke_image}})
     echo "$DISK" > {{_smoke_state}}
