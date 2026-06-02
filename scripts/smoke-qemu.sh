@@ -10,8 +10,9 @@
 # the phermes-qemu container so the boot configuration stays in one place.
 set -euo pipefail
 
-IMAGE="${1:?usage: smoke-qemu.sh <image> [native:0|1]}"
+IMAGE="${1:?usage: smoke-qemu.sh <image> [native:0|1] [serial:0|1]}"
 NATIVE="${2:-0}"
+SERIAL="${3:-0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 [ -f "$IMAGE" ] || {
@@ -23,7 +24,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # mid-write, run 'just smoke-clean' and rebuild first.
 
 if [ "$NATIVE" = "1" ]; then
-  if [ -n "${DISPLAY:-}" ]; then
+  if [ "$SERIAL" = "1" ]; then
+    export QEMU_DISPLAY=serial
+  elif [ -n "${DISPLAY:-}" ]; then
     export QEMU_DISPLAY=window
   else
     export QEMU_DISPLAY=vnc
@@ -48,7 +51,7 @@ fi
 # Run QEMU as the invoking user, not container-root, so the process is
 # unprivileged and killable on the host. --init gives a real PID 1 that reaps
 # and forwards signals, so Ctrl-C tears the container down cleanly.
-run_args=(--rm --init -p 5900:5900 --user "$(id -u):$(id -g)")
+run_args=(--rm --init --user "$(id -u):$(id -g)")
 
 # Pass /dev/kvm through when present so QEMU accelerates; grant its group to the
 # non-root container user so it can open the device. Without it: TCG.
@@ -56,11 +59,22 @@ if [ -e /dev/kvm ]; then
   run_args+=(--device /dev/kvm --group-add "$(stat -c '%g' /dev/kvm)")
 fi
 
-echo "Booting in Docker — connect a VNC viewer to localhost:5900"
+# Serial mode streams the boot to this terminal; otherwise serve the display
+# over VNC on a published port.
+display_env=(-e QEMU_VNC=0.0.0.0:0)
+if [ "$SERIAL" = "1" ]; then
+  run_args+=(-it)
+  display_env=(-e QEMU_DISPLAY=serial)
+  echo "Booting in Docker — serial console follows (exit with Ctrl-A X)"
+else
+  run_args+=(-p 5900:5900)
+  echo "Booting in Docker — connect a VNC viewer to localhost:5900"
+fi
+
 # qemu-boot.sh is bind-mounted (not baked) so the running logic always matches
 # the working tree — no image rebuild needed when the script changes.
 exec "${docker[@]}" run "${run_args[@]}" \
-  -e QEMU_VNC=0.0.0.0:0 \
+  "${display_env[@]}" \
   -v "$IMAGE:/image.img:ro" \
   -v "$HERE/qemu-boot.sh:/qemu-boot.sh:ro" \
   --entrypoint bash \

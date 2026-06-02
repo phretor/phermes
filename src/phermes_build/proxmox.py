@@ -64,10 +64,16 @@ def grub_defaults_content() -> str:
         'GRUB_TIMEOUT=5\n'
         'GRUB_DISTRIBUTOR="PHermes"\n'
         'GRUB_CMDLINE_LINUX_DEFAULT="quiet"\n'
-        'GRUB_CMDLINE_LINUX=""\n'
+        # Dual console: tty0 for the VGA/VNC display, ttyS0 for the serial line.
+        # The last console= owns /dev/console, so the initramfs LUKS prompt is
+        # interactive over serial — needed for headless boot and recovery.
+        'GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"\n'
         'GRUB_ENABLE_CRYPTODISK=y\n'
         # Prevent os-prober from scanning host partitions inside a container
         'GRUB_DISABLE_OS_PROBER=true\n'
+        # Show the GRUB menu on both the display and the serial line
+        'GRUB_TERMINAL="console serial"\n'
+        'GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"\n'
     )
 
 

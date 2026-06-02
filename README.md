@@ -195,7 +195,10 @@ just smoke-clean      # tear down and delete the image
 `smoke-qemu` boots the built disk in QEMU through a small dedicated container
 (`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over
 VNC on `localhost:5900`. Pass `native=1` to run QEMU directly on the host instead (opens
-a graphical window when `$DISPLAY` is set).
+a graphical window when `$DISPLAY` is set), or `serial=1` to stream the boot to your
+terminal (`just smoke-qemu serial=1`) — the guest is built with a serial console, so you
+see the full boot log and can type the LUKS passphrase there. Exit serial mode with
+`Ctrl-A X`.
 
 It uses **KVM acceleration when `/dev/kvm` is available** and falls back to TCG emulation
 automatically when it isn't — so KVM is never required, just used when present. If the

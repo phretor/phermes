@@ -134,9 +134,9 @@ smoke-verify:
         -v "$PWD/scripts/smoke-verify.sh:/verify.sh:ro" \
         --entrypoint /bin/bash phermes-build /verify.sh "$DISK"
 
-# Boot the smoke image in QEMU under OVMF (UEFI, no KVM). Docker by default; native=1 runs on the host
-smoke-qemu native="0":
-    bash scripts/smoke-qemu.sh {{_smoke_image}} "{{native}}"
+# Boot the smoke image in QEMU under OVMF (UEFI, KVM when available). Docker by default; native=1 host, serial=1 console
+smoke-qemu native="0" serial="0":
+    bash scripts/smoke-qemu.sh {{_smoke_image}} "{{native}}" "{{serial}}"
 
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:

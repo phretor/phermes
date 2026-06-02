@@ -80,20 +80,34 @@ for p in /sys/module/kvm_intel/parameters/nested /sys/module/kvm_amd/parameters/
   break
 done
 
-if [ "$DISPLAY_MODE" = "window" ]; then
+case "$DISPLAY_MODE" in
+window)
   echo "QEMU: graphical window"
-else
+  ;;
+serial)
+  args+=(-display none -serial mon:stdio)
+  echo "QEMU: serial console on this terminal (exit with Ctrl-A X, monitor with Ctrl-A C)"
+  ;;
+*)
   args+=(-display none -vnc "$VNC_BIND")
   echo "QEMU: VNC on display :0 (port 5900)"
-fi
+  ;;
+esac
 
 echo "Acceleration: $accel"
 if [ "${accel%% *}" = "KVM" ]; then
   echo "Host nested virtualization: $nested (inner Proxmox VMs accelerate only when enabled)"
 fi
 echo "Booting $IMAGE under OVMF. LUKS passphrase: phermes-change-me"
-# Run QEMU in the background and forward termination signals so Ctrl-C (or
-# `docker stop`) tears it down cleanly instead of orphaning it.
+
+if [ "$DISPLAY_MODE" = "serial" ]; then
+  # Foreground so the serial console is interactive (watch the boot, type the
+  # LUKS passphrase). Exit QEMU with Ctrl-A X.
+  exec qemu-system-x86_64 "${args[@]}"
+fi
+
+# Otherwise run QEMU in the background and forward termination signals so Ctrl-C
+# (or `docker stop`) tears it down cleanly instead of orphaning it.
 qemu-system-x86_64 "${args[@]}" &
 qemu_pid=$!
 trap 'kill -TERM "$qemu_pid" 2>/dev/null || true' INT TERM

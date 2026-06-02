@@ -86,6 +86,8 @@ def test_grub_defaults_content():
     content = prox_mod.grub_defaults_content()
     assert "GRUB_ENABLE_CRYPTODISK=y" in content
     assert "GRUB_DISABLE_OS_PROBER=true" in content
+    assert "console=ttyS0,115200" in content
+    assert 'GRUB_TERMINAL="console serial"' in content
 
 
 def test_install_grub_uses_no_nvram(monkeypatch):
