@@ -49,6 +49,31 @@ def test_crypttab_content():
 def test_grub_defaults_content():
     content = prox_mod.grub_defaults_content()
     assert "GRUB_ENABLE_CRYPTODISK=y" in content
+    assert "GRUB_DISABLE_OS_PROBER=true" in content
+
+
+def test_install_grub_uses_no_nvram(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.install_grub("/mnt/pve-root", "/dev/sdb")
+    assert any("--no-nvram" in c for c in calls)
+
+
+def test_setup_policy_rcd_creates_file(tmp_path):
+    prox_mod._setup_policy_rcd(str(tmp_path))
+    policy = tmp_path / "usr" / "sbin" / "policy-rc.d"
+    assert policy.exists()
+    assert "exit 101" in policy.read_text()
+    assert oct(policy.stat().st_mode)[-3:] == "755"
+
+
+def test_teardown_policy_rcd_removes_file(tmp_path):
+    prox_mod._setup_policy_rcd(str(tmp_path))
+    prox_mod._teardown_policy_rcd(str(tmp_path))
+    assert not (tmp_path / "usr" / "sbin" / "policy-rc.d").exists()
+
+
+def test_teardown_policy_rcd_idempotent(tmp_path):
+    prox_mod._teardown_policy_rcd(str(tmp_path))  # should not raise
 
 
 def test_chroot_apt_install(monkeypatch):

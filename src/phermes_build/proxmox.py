@@ -1,3 +1,4 @@
+import contextlib
 import os
 
 from phermes_build.runner import run_cmd
@@ -50,6 +51,8 @@ def grub_defaults_content() -> str:
         'GRUB_CMDLINE_LINUX_DEFAULT="quiet"\n'
         'GRUB_CMDLINE_LINUX=""\n'
         'GRUB_ENABLE_CRYPTODISK=y\n'
+        # Prevent os-prober from scanning host partitions inside a container
+        'GRUB_DISABLE_OS_PROBER=true\n'
     )
 
 
@@ -65,9 +68,25 @@ def _unbind_chroot(mount_point: str) -> None:
         run_cmd(["umount", "-l", os.path.join(mount_point, sub)], check=False)
 
 
+def _setup_policy_rcd(mount_point: str) -> None:
+    """Block service starts during apt postinstall — no systemd in chroot."""
+    path = os.path.join(mount_point, "usr/sbin/policy-rc.d")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("#!/bin/sh\nexit 101\n")
+    os.chmod(path, 0o755)
+
+
+def _teardown_policy_rcd(mount_point: str) -> None:
+    path = os.path.join(mount_point, "usr/sbin/policy-rc.d")
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(path)
+
+
 def install_grub(mount_point: str, disk: str) -> None:
-    # --force required for loop devices and virtual disks
-    run_cmd(["chroot", mount_point, "grub-install", "--force", disk])
+    # --force: required for loop/virtual devices
+    # --no-nvram: skip EFI NVRAM update (not applicable in container)
+    run_cmd(["chroot", mount_point, "grub-install", "--force", "--no-nvram", disk])
     run_cmd(["chroot", mount_point, "update-grub"])
 
 
@@ -102,6 +121,8 @@ def install_proxmox(mount_point: str, disk: str, luks_device: str) -> None:
     # /proc /sys /dev /dev/pts must be mounted for apt postinstall scripts,
     # grub-install, and update-initramfs to work inside the chroot.
     _bind_chroot(mount_point)
+    # policy-rc.d prevents service starts — no running systemd in chroot
+    _setup_policy_rcd(mount_point)
     try:
         chroot_apt_install(
             mount_point,
@@ -121,4 +142,5 @@ def install_proxmox(mount_point: str, disk: str, luks_device: str) -> None:
         install_grub(mount_point, disk)
         run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
     finally:
+        _teardown_policy_rcd(mount_point)
         _unbind_chroot(mount_point)
