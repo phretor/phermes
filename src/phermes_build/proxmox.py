@@ -83,10 +83,11 @@ def grub_defaults_content() -> str:
         # Verbose boot (no "quiet") so the serial console shows the full boot —
         # appropriate for a headless appliance where serial is the recovery path.
         'GRUB_CMDLINE_LINUX_DEFAULT=""\n'
-        # Dual console: tty0 for the VGA/VNC display, ttyS0 for the serial line.
-        # The last console= owns /dev/console, so the initramfs LUKS prompt is
-        # interactive over serial — needed for headless boot and recovery.
-        'GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"\n'
+        # Dual console: serial (ttyS0) for logging/recovery, tty0 last so the
+        # local display/keyboard (and the VNC console) own /dev/console — that
+        # is where the interactive LUKS prompt appears. Boot logs still mirror
+        # to serial; headless unlock uses Dropbear over SSH.
+        'GRUB_CMDLINE_LINUX="console=ttyS0,115200 console=tty0"\n'
         'GRUB_ENABLE_CRYPTODISK=y\n'
         # Prevent os-prober from scanning host partitions inside a container
         'GRUB_DISABLE_OS_PROBER=true\n'
