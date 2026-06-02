@@ -192,6 +192,11 @@ just smoke-shell      # interactive shell in the build container
 just smoke-clean      # tear down and delete the image
 ```
 
+`smoke-qemu` boots the built disk in QEMU through a small dedicated container
+(`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over
+VNC on `localhost:5900`. Pass `native=1` to run QEMU directly on the host instead (opens
+a graphical window when `$DISPLAY` is set). TCG emulation is used, so KVM is not required.
+
 `smoke-run` / `smoke-full` use Docker by default; pass `native=1` to run `phermes-build`
 directly. The active loop device is recorded in `.smoke`. Always `smoke-clean` before a
 fresh `smoke-create`. `smoke-verify` exits non-zero if any partition check fails, so it
