@@ -8,6 +8,9 @@ PROXMOX_KEYRING_URL = (
 )
 PROXMOX_KEYRING_PATH = "/etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg"
 
+# Bind-mounts required for chroot apt-get and postinstall scripts.
+_CHROOT_BIND_MOUNTS = ["proc", "sys", "dev", "dev/pts"]
+
 
 def format_root_lv(device: str) -> None:
     run_cmd(["mkfs.ext4", "-F", "-L", "pve-root", device])
@@ -50,14 +53,29 @@ def grub_defaults_content() -> str:
     )
 
 
+def _bind_chroot(mount_point: str) -> None:
+    for sub in _CHROOT_BIND_MOUNTS:
+        target = os.path.join(mount_point, sub)
+        os.makedirs(target, exist_ok=True)
+        run_cmd(["mount", "--bind", f"/{sub}", target])
+
+
+def _unbind_chroot(mount_point: str) -> None:
+    for sub in reversed(_CHROOT_BIND_MOUNTS):
+        run_cmd(["umount", "-l", os.path.join(mount_point, sub)], check=False)
+
+
 def install_grub(mount_point: str, disk: str) -> None:
-    run_cmd(["chroot", mount_point, "grub-install", disk])
+    # --force required for loop devices and virtual disks
+    run_cmd(["chroot", mount_point, "grub-install", "--force", disk])
     run_cmd(["chroot", mount_point, "update-grub"])
 
 
 def chroot_apt_install(mount_point: str, *packages: str) -> None:
+    # DEBIAN_FRONTEND=noninteractive suppresses postfix and other interactive prompts
     run_cmd(
         [
+            "env", "DEBIAN_FRONTEND=noninteractive",
             "chroot", mount_point,
             "apt-get", "install", "-y", "--no-install-recommends",
             *packages,
@@ -80,19 +98,27 @@ def install_proxmox(mount_point: str, disk: str, luks_device: str) -> None:
         f.write(proxmox_apt_sources())
 
     run_cmd(["chroot", mount_point, "apt-get", "update"])
-    chroot_apt_install(
-        mount_point,
-        "proxmox-ve", "postfix", "open-iscsi",
-        "cryptsetup-initramfs", "dropbear-initramfs",
-    )
 
-    crypttab_path = os.path.join(mount_point, "etc/crypttab")
-    with open(crypttab_path, "w") as f:
-        f.write(crypttab_entry(luks_device, "phermes_luks"))
+    # /proc /sys /dev /dev/pts must be mounted for apt postinstall scripts,
+    # grub-install, and update-initramfs to work inside the chroot.
+    _bind_chroot(mount_point)
+    try:
+        chroot_apt_install(
+            mount_point,
+            "proxmox-ve", "postfix", "open-iscsi",
+            "cryptsetup-initramfs", "dropbear-initramfs",
+            "grub-pc",
+        )
 
-    grub_path = os.path.join(mount_point, "etc/default/grub")
-    with open(grub_path, "w") as f:
-        f.write(grub_defaults_content())
+        crypttab_path = os.path.join(mount_point, "etc/crypttab")
+        with open(crypttab_path, "w") as f:
+            f.write(crypttab_entry(luks_device, "phermes_luks"))
 
-    install_grub(mount_point, disk)
-    run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
+        grub_path = os.path.join(mount_point, "etc/default/grub")
+        with open(grub_path, "w") as f:
+            f.write(grub_defaults_content())
+
+        install_grub(mount_point, disk)
+        run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
+    finally:
+        _unbind_chroot(mount_point)

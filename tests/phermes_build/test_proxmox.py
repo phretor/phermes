@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from phermes_build import proxmox as prox_mod
 
 
@@ -27,10 +29,11 @@ def test_proxmox_apt_sources_content():
     assert "bookworm" in content
 
 
-def test_install_grub_called(monkeypatch):
+def test_install_grub_uses_force(monkeypatch):
     calls = _capture(monkeypatch)
     prox_mod.install_grub("/mnt/pve-root", "/dev/sdb")
     assert any("grub-install" in str(c) for c in calls)
+    assert any("--force" in c for c in calls)
 
 
 def test_crypttab_content():
@@ -51,6 +54,31 @@ def test_grub_defaults_content():
 def test_chroot_apt_install(monkeypatch):
     calls = _capture(monkeypatch)
     prox_mod.chroot_apt_install("/mnt/pve-root", "proxmox-ve", "postfix")
-    assert any("chroot" in c[0] for c in calls)
-    assert any("apt-get" in c for c in calls)
-    assert any("proxmox-ve" in c for c in calls)
+    # env prefix wraps the command — search across the full command list
+    assert any("chroot" in str(c) for c in calls)
+    assert any("apt-get" in str(c) for c in calls)
+    assert any("proxmox-ve" in str(c) for c in calls)
+
+
+def test_chroot_apt_install_sets_debian_frontend(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.chroot_apt_install("/mnt/pve-root", "proxmox-ve")
+    assert any("DEBIAN_FRONTEND=noninteractive" in str(c) for c in calls)
+
+
+def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
+    calls = _capture(monkeypatch)
+    with patch("os.makedirs"):
+        prox_mod._bind_chroot(str(tmp_path))
+    mount_calls = [c for c in calls if c[0] == "mount"]
+    mounted = [c[-1] for c in mount_calls]
+    assert any("proc" in m for m in mounted)
+    assert any("sys" in m for m in mounted)
+    assert any("/dev" in m for m in mounted)
+
+
+def test_unbind_chroot_unmounts_all_dirs(monkeypatch, tmp_path):
+    calls = _capture(monkeypatch)
+    prox_mod._unbind_chroot(str(tmp_path))
+    umount_calls = [c for c in calls if "umount" in c[0]]
+    assert len(umount_calls) == len(prox_mod._CHROOT_BIND_MOUNTS)

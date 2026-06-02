@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     exfatprogs \
     fdisk \
     gdisk \
+    parted \
     lvm2 \
     udev \
     util-linux \
