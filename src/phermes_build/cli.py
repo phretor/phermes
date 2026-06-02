@@ -48,6 +48,19 @@ def build(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Stream every command's output live")
     ] = False,
+    dev_credentials: Annotated[
+        bool,
+        typer.Option(
+            help="INSECURE: bake known temp credentials for testing (never for production)"
+        ),
+    ] = False,
+    luks_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            envvar="PHERMES_LUKS_PASSPHRASE",
+            help="LUKS passphrase for a production build (or set PHERMES_LUKS_PASSPHRASE)",
+        ),
+    ] = None,
 ) -> None:
     validate_disk_path(disk)
     set_verbose(verbose)
@@ -56,6 +69,7 @@ def build(
         disk=disk,
         share_size_gb=share_size,
         share_encrypted=share_encrypted,
+        temp_luks_passphrase=_resolve_luks_passphrase(dev_credentials, luks_passphrase),
     )
 
     if import_vm_macos:
@@ -85,6 +99,7 @@ def build(
     ]
     os_steps = [
         ("Installing Proxmox VE", lambda: _install_proxmox(layout)),
+        ("Setting root credentials", lambda: _setup_credentials(dev_credentials)),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
@@ -135,10 +150,32 @@ def _run_steps_verbose(steps) -> None:
         console.print(f"[green]✓[/green] {description}")
 
 
+def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None) -> str:
+    """Pick the LUKS passphrase, refusing to ship a known key in production."""
+    if dev_credentials:
+        return TEMP_PASSPHRASE
+    if luks_passphrase:
+        return luks_passphrase
+    console.print(
+        "[red]Error:[/red] a production build needs a LUKS passphrase. Pass "
+        "[bold]--luks-passphrase[/bold] (or set PHERMES_LUKS_PASSPHRASE), or use "
+        "[bold]--dev-credentials[/bold] for testing."
+    )
+    raise SystemExit(1)
+
+
+def _setup_credentials(dev_credentials: bool) -> None:
+    """Dev builds get a known temp root password; production locks root entirely."""
+    if dev_credentials:
+        proxmox.set_root_password(PVE_ROOT_MOUNT, proxmox.TEMP_ROOT_PASSWORD)
+    else:
+        proxmox.lock_root_account(PVE_ROOT_MOUNT)
+
+
 def _setup_luks(layout, cfg: BuildConfig) -> None:
     luks_part = partitioner.partition_path(layout.disk, 3)
-    luks.format_luks(luks_part, TEMP_PASSPHRASE)
-    luks.open_luks(luks_part, LUKS_NAME, TEMP_PASSPHRASE)
+    luks.format_luks(luks_part, cfg.temp_luks_passphrase)
+    luks.open_luks(luks_part, LUKS_NAME, cfg.temp_luks_passphrase)
 
 
 def _setup_lvm(layout) -> None:

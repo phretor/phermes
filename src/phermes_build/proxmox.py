@@ -19,8 +19,15 @@ _CHROOT_BIND_MOUNTS = ["proc", "sys", "dev", "dev/pts"]
 
 
 def set_root_password(mount_point: str, password: str) -> None:
-    """Set the chroot's root password via chpasswd (temporary, wizard replaces it)."""
+    """Set the chroot's root password via chpasswd (dev only — wizard replaces it)."""
     run_cmd(["chroot", mount_point, "chpasswd"], input=f"root:{password}\n")
+
+
+def lock_root_account(mount_point: str) -> None:
+    """Lock root so there is no console login. The production default — admin
+    happens through the PHermes UI / restricted Proxmox RBAC, never a shipped
+    password."""
+    run_cmd(["chroot", mount_point, "passwd", "--lock", "root"])
 
 
 def format_root_lv(device: str) -> None:
@@ -219,7 +226,6 @@ def install_proxmox(
             "grub-efi-amd64",
         )
 
-        set_root_password(mount_point, TEMP_ROOT_PASSWORD)
         install_grub(mount_point)
         run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
     finally:

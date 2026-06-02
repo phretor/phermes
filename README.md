@@ -70,6 +70,11 @@ PHermes is designed for users who treat their AI environment as infrastructure w
 - **No binaries distributed.** `phermes-build` fetches Proxmox from official community
   repos at build time. The tool itself is signed and checksummed. Nothing is bundled or
   pre-compiled by PHermes.
+- **No shipped credentials.** A production build locks the root account (no console
+  login) and refuses to use a hardcoded LUKS key — the passphrase is operator-supplied at
+  build time. Proxmox admin happens only through the restricted PHermes UI / RBAC, never a
+  default password. Known test credentials exist solely behind an explicit
+  `--dev-credentials` flag and can never appear in a normal build.
 - **No mandatory cloud.** LLM API calls are the only optional outbound traffic. Everything
   else runs entirely offline. Local model backends (llama.cpp, vLLM, Ollama) are supported.
 - **Snapshot-before-change.** Every VM switch and every update triggers an automatic

@@ -144,6 +144,14 @@ def test_set_root_password(monkeypatch):
     assert received["input"] == "root:secret123\n"
 
 
+def test_lock_root_account(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.lock_root_account("/mnt/pve-root")
+    assert any("passwd" in c for c in calls)
+    assert any("--lock" in c for c in calls)
+    assert any("root" in c for c in calls)
+
+
 def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
     calls = _capture(monkeypatch)
     with patch("os.makedirs"):
