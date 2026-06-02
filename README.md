@@ -187,7 +187,6 @@ just smoke-run        # disk setup only (partition/LUKS/LVM/Btrfs), ~seconds
 just smoke-full       # full build including Proxmox install
 just smoke-inspect    # lsblk + LVM + Btrfs state
 just smoke-verify     # mount every partition and assert expected content
-just smoke-qemu       # boot the image in QEMU under OVMF (UEFI, no KVM needed)
 just smoke-shell      # interactive shell in the build container
 just smoke-clean      # tear down and delete the image
 ```
