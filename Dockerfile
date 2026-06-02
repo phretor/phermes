@@ -21,8 +21,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.17 /uv /usr/local/bin/uv
 
 WORKDIR /app
 COPY .python-version pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+# Install deps only — cached layer unaffected by src/ changes
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
+# Install the local package now that source files are present
+RUN uv sync --frozen --no-dev
 
 ENTRYPOINT ["uv", "run", "--no-sync", "phermes-build"]
