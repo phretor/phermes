@@ -90,7 +90,10 @@ smoke-run native="0":
     if [ "{{native}}" = "1" ]; then
         sudo phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
+        # Bind-mount live src so the container always runs current code (the
+        # image only provides the toolchain + deps); run 'just docker-build'
+        # after changing dependencies.
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     fi
 
 # Full Proxmox install (verbose). Docker by default; override with native=1
@@ -102,7 +105,10 @@ smoke-full native="0":
     if [ "{{native}}" = "1" ]; then
         sudo phermes-build "$DISK" --share-size 0 --verbose --dev-credentials
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --verbose --dev-credentials
+        # Bind-mount live src so the container always runs current code (the
+        # image only provides the toolchain + deps); run 'just docker-build'
+        # after changing dependencies.
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk
