@@ -103,20 +103,31 @@ Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superp
 
 ## Hardware requirements
 
-- Any x86-64 machine with KVM support (Intel VT-x or AMD-V)
-- RAM depends on the guest OS:
-  - macOS or Windows VM: ≥16 GB (32 GB recommended)
-  - Console-only Linux VM: ≥8 GB
+**Target machine** (where PHermes runs):
+- x86-64 with KVM support (Intel VT-x or AMD-V)
+- RAM: ≥16 GB for macOS or Windows VM (32 GB recommended); ≥8 GB for console-only Linux
 - ≥500 GB SSD (1 TB recommended; 2 TB+ for large knowledge bases)
+
+**Builder machine** (where `phermes-build` runs):
+- **Linux only** — `phermes-build` uses Linux kernel subsystems (cryptsetup, LVM, sfdisk, debootstrap) that have no equivalent on macOS or Windows
+- macOS/Windows users: run via Docker (see below) or use a Linux VM
 
 ## Distribution
 
 PHermes ships as `phermes-build` — a signed Python CLI that assembles a bootable SSD
 from official upstream sources. No Proxmox, macOS, or Windows binaries are bundled.
 
+### Native (Linux)
+
+Requires Python 3.13+, uv, and the Linux toolchain (`cryptsetup`, `lvm2`, `btrfs-progs`,
+`debootstrap`, `dosfstools`, `exfatprogs`):
+
 ```bash
 # Minimal — first-boot wizard handles VM image acquisition
 phermes-build /dev/sdX
+
+# Disk setup only — skip Proxmox install (fast iteration / smoke testing)
+phermes-build /dev/sdX --skip-os-install
 
 # With a pre-staged macOS image
 phermes-build /dev/sdX --import-vm macos=/path/to/macos.qcow2
@@ -127,6 +138,20 @@ phermes-build /dev/sdX --download-vm macos --download-vm windows
 # Custom share partition
 phermes-build /dev/sdX --share-size 500G --share-encrypted
 ```
+
+### Via Docker (Linux host only)
+
+Bundles the full toolchain — no local dependencies required beyond Docker:
+
+```bash
+sudo docker run --rm --privileged \
+  --device=/dev/sdX \
+  ghcr.io/phretor/phermes-build \
+  /dev/sdX
+```
+
+> **Note:** Docker device passthrough only works on Linux hosts. Docker Desktop on macOS
+> and Windows does not surface host block devices into containers.
 
 > **macOS note:** macOS VMs may only be run on Apple hardware under the macOS EULA.
 > PHermes does not distribute macOS images; users supply their own installer.

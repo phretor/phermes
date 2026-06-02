@@ -17,32 +17,46 @@ Full design: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superp
 - **Phase 3:** `phermes` CLI (vm switch, update, rollback)
 - **Phase 4:** VM definitions + Hermes-in-VM integration
 
+## Platform constraint
+
+`phermes-build` is **Linux-only**. It uses kernel subsystems (`cryptsetup`, `lvm2`, `sfdisk`, `debootstrap`) that have no macOS/Windows equivalent. CI runs on `ubuntu-latest`. Docker bundles the toolchain for users who don't want to install deps natively — but Docker device passthrough only works on Linux hosts too.
+
 ## Development commands
 
 ```bash
 # Install deps
 uv sync
 
-# Run tests (unit only — no root required)
+# Run tests (unit only — no root required, works on any OS)
 uv run pytest -q
 
 # Run a single test
 uv run pytest tests/phermes_build/test_disk.py::test_compute_layout_1tb -v
 
-# Run integration tests (requires root + loop device support)
+# Run integration tests (requires root + loop device, Linux only)
 sudo uv run pytest -m integration -v
 
-# Lint and format
+# Lint and type check
 uv run ruff check src/ tests/
-uv run ruff format src/ tests/
-
-# Type check
 uv run ty check src/
 
 # Install CLI locally
 uv pip install -e .
 phermes-build --help
+
+# Build Docker image
+docker build -t phermes-build .
+
+# Run via Docker (Linux host, block device must be visible to host kernel)
+sudo docker run --rm --privileged --device=/dev/sdX phermes-build /dev/sdX
 ```
+
+## CI/CD
+
+| Workflow | Trigger | Runs |
+|---|---|---|
+| `.github/workflows/ci.yml` | push / PR | Unit tests, ruff, ty check |
+| `.github/workflows/integration.yml` | push to main / manual | Integration tests with loop devices (needs sudo) |
 
 ## Architecture
 
