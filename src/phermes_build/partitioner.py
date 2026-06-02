@@ -3,7 +3,9 @@ from phermes_build.runner import run_cmd
 
 
 def partition_path(disk: str, num: int) -> str:
-    sep = "p" if "nvme" in disk or "mmcblk" in disk else ""
+    # The kernel inserts a 'p' separator when the device name ends in a digit
+    # (nvme0n1p1, mmcblk0p1, loop0p1) to disambiguate from the partition number.
+    sep = "p" if disk[-1].isdigit() else ""
     return f"{disk}{sep}{num}"
 
 

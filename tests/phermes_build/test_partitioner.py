@@ -49,3 +49,6 @@ def test_create_partition_table_calls_sfdisk(monkeypatch):
 def test_partition_path():
     assert part_mod.partition_path("/dev/sdb", 1) == "/dev/sdb1"
     assert part_mod.partition_path("/dev/nvme0n1", 1) == "/dev/nvme0n1p1"
+    assert part_mod.partition_path("/dev/mmcblk0", 1) == "/dev/mmcblk0p1"
+    # Loop devices end in a digit and require the 'p' separator
+    assert part_mod.partition_path("/dev/loop0", 3) == "/dev/loop0p3"
