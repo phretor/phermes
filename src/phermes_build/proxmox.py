@@ -63,7 +63,9 @@ def grub_defaults_content() -> str:
         'GRUB_DEFAULT=0\n'
         'GRUB_TIMEOUT=5\n'
         'GRUB_DISTRIBUTOR="PHermes"\n'
-        'GRUB_CMDLINE_LINUX_DEFAULT="quiet"\n'
+        # Verbose boot (no "quiet") so the serial console shows the full boot —
+        # appropriate for a headless appliance where serial is the recovery path.
+        'GRUB_CMDLINE_LINUX_DEFAULT=""\n'
         # Dual console: tty0 for the VGA/VNC display, ttyS0 for the serial line.
         # The last console= owns /dev/console, so the initramfs LUKS prompt is
         # interactive over serial — needed for headless boot and recovery.

@@ -57,6 +57,11 @@ args=(
   -drive "if=pflash,format=raw,file=$vars"
   -drive "file=$IMAGE,format=raw,if=virtio"
   -snapshot
+  # User-mode NIC so networking doesn't stall the boot. Forward host 2222 to the
+  # guest's Dropbear (initramfs SSH) so the LUKS volume can be unlocked with
+  # `ssh -p 2222 root@localhost` instead of typing at the console.
+  -netdev user,id=net0,hostfwd=tcp::2222-:2222
+  -device virtio-net-pci,netdev=net0
 )
 
 # Acceleration: prefer KVM, fall back to TCG when /dev/kvm is absent or not
