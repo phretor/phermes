@@ -29,11 +29,47 @@ def test_proxmox_apt_sources_content():
     assert "bookworm" in content
 
 
-def test_install_grub_uses_force(monkeypatch):
+def test_install_grub_uefi_removable(monkeypatch):
     calls = _capture(monkeypatch)
-    prox_mod.install_grub("/mnt/pve-root", "/dev/sdb")
-    assert any("grub-install" in str(c) for c in calls)
-    assert any("--force" in c for c in calls)
+    prox_mod.install_grub("/mnt/pve-root")
+    grub_calls = [c for c in calls if "grub-install" in c]
+    assert grub_calls
+    grub = grub_calls[0]
+    assert "--target=x86_64-efi" in grub
+    assert "--removable" in grub
+    assert "--efi-directory=/boot/efi" in grub
+
+
+def test_install_grub_runs_update_grub(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.install_grub("/mnt/pve-root")
+    assert any("update-grub" in c for c in calls)
+
+
+def test_format_boot_partitions(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.format_boot_partitions("/dev/loop0p1", "/dev/loop0p2")
+    assert any("mkfs.vfat" in c[0] for c in calls)
+    assert any("mkfs.ext4" in c[0] for c in calls)
+    assert any("/dev/loop0p1" in c for c in calls)
+    assert any("/dev/loop0p2" in c for c in calls)
+
+
+def test_mount_boot_order(monkeypatch):
+    calls = _capture(monkeypatch)
+    with patch("os.makedirs"):
+        prox_mod.mount_boot("/mnt/pve-root", "/dev/loop0p1", "/dev/loop0p2")
+    mounts = [c for c in calls if c[0] == "mount"]
+    # /boot must be mounted before /boot/efi
+    assert mounts[0][-1].endswith("/boot")
+    assert mounts[1][-1].endswith("/boot/efi")
+
+
+def test_fstab_content():
+    content = prox_mod.fstab_content()
+    assert "/dev/pve/root" in content
+    assert "LABEL=boot" in content
+    assert "/boot/efi" in content
 
 
 def test_crypttab_content():
@@ -54,7 +90,7 @@ def test_grub_defaults_content():
 
 def test_install_grub_uses_no_nvram(monkeypatch):
     calls = _capture(monkeypatch)
-    prox_mod.install_grub("/mnt/pve-root", "/dev/sdb")
+    prox_mod.install_grub("/mnt/pve-root")
     assert any("--no-nvram" in c for c in calls)
 
 

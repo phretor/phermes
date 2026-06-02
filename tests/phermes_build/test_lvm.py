@@ -66,3 +66,18 @@ def test_setup_lvm_calls_all_steps(monkeypatch):
     assert result["vg"] == "pve"
     assert "root_lv" in result
     assert "thin_pool" in result
+
+
+def test_lvm_commands_disable_udev_sync(monkeypatch):
+    """Every LVM command must disable udev sync so it works without udev."""
+    calls = _capture(monkeypatch)
+    lvm_mod.create_pv("/dev/mapper/phermes_luks")
+    lvm_mod.create_vg("/dev/mapper/phermes_luks", "pve")
+    lvm_mod.create_root_lv("pve", size_gb=30)
+    lvm_mod.create_thin_pool("pve", pool_name="data", size_gb=370)
+    lvm_mod.create_btrfs_lv("pve", data_gb=330)
+    for cmd in calls:
+        assert "--config" in cmd
+        idx = cmd.index("--config")
+        assert "udev_sync = 0" in cmd[idx + 1]
+        assert "udev_rules = 0" in cmd[idx + 1]

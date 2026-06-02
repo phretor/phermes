@@ -2,33 +2,43 @@ from phermes_build.runner import run_cmd
 
 ROOT_LV_GB = 30
 
+# By default LVM waits for udev to create device-mapper nodes. In udev-less
+# environments (containers) that wait fails with "device not cleared / Failed
+# to wipe start of new LV". Disabling udev sync makes LVM create nodes itself.
+_LVM_CONFIG = "activation { udev_sync = 0 udev_rules = 0 }"
+
+
+def _lvm(binary: str, *args: str) -> list[str]:
+    """Build an LVM command with udev sync disabled, binary name kept first."""
+    return [binary, "--config", _LVM_CONFIG, *args]
+
 
 def compute_lvm_sizes(total_lvm_gb: int) -> dict[str, int]:
     return {"root_gb": ROOT_LV_GB, "pool_gb": total_lvm_gb - ROOT_LV_GB}
 
 
 def create_pv(device: str) -> None:
-    run_cmd(["pvcreate", "--force", device])
+    run_cmd(_lvm("pvcreate", "--force", device))
 
 
 def create_vg(device: str, vg_name: str = "pve") -> None:
-    run_cmd(["vgcreate", vg_name, device])
+    run_cmd(_lvm("vgcreate", vg_name, device))
 
 
 def create_root_lv(vg_name: str, size_gb: int = ROOT_LV_GB, lv_name: str = "root") -> str:
-    run_cmd(["lvcreate", "-L", f"{size_gb}G", "-n", lv_name, vg_name])
+    run_cmd(_lvm("lvcreate", "-L", f"{size_gb}G", "-n", lv_name, vg_name))
     return f"/dev/{vg_name}/{lv_name}"
 
 
 def create_thin_pool(vg_name: str, pool_name: str, size_gb: int) -> str:
-    run_cmd(["lvcreate", "--thin", "-L", f"{size_gb}G", f"{vg_name}/{pool_name}"])
+    run_cmd(_lvm("lvcreate", "--thin", "-L", f"{size_gb}G", f"{vg_name}/{pool_name}"))
     return f"{vg_name}/{pool_name}"
 
 
 def create_thin_volume(vg_name: str, pool_name: str, vol_name: str, size_gb: int) -> str:
     run_cmd(
-        ["lvcreate", "--virtualsize", f"{size_gb}G", "--thin",
-         f"{vg_name}/{pool_name}", "-n", vol_name]
+        _lvm("lvcreate", "--virtualsize", f"{size_gb}G", "--thin",
+             f"{vg_name}/{pool_name}", "-n", vol_name)
     )
     return f"/dev/{vg_name}/{vol_name}"
 
@@ -37,7 +47,7 @@ BTRFS_LV_NAME = "btrfs-data"
 
 
 def create_btrfs_lv(vg_name: str, data_gb: int) -> str:
-    run_cmd(["lvcreate", "-L", f"{data_gb}G", "-n", BTRFS_LV_NAME, vg_name])
+    run_cmd(_lvm("lvcreate", "-L", f"{data_gb}G", "-n", BTRFS_LV_NAME, vg_name))
     return f"/dev/{vg_name}/{BTRFS_LV_NAME}"
 
 

@@ -17,6 +17,12 @@ def format_root_lv(device: str) -> None:
     run_cmd(["mkfs.ext4", "-F", "-L", "pve-root", device])
 
 
+def format_boot_partitions(efi_device: str, boot_device: str) -> None:
+    """Format the EFI system partition (FAT32) and the plaintext /boot (ext4)."""
+    run_cmd(["mkfs.vfat", "-F", "32", "-n", "PHERMESEFI", efi_device])
+    run_cmd(["mkfs.ext4", "-F", "-L", "boot", boot_device])
+
+
 def run_debootstrap(mount_point: str) -> None:
     run_cmd(
         [
@@ -41,6 +47,15 @@ def proxmox_apt_sources() -> str:
 
 def crypttab_entry(luks_device: str, luks_name: str) -> str:
     return f"{luks_name}\t{luks_device}\tnone\tluks,discard\n"
+
+
+def fstab_content() -> str:
+    """fstab for the installed system. Boot partitions referenced by label."""
+    return (
+        "/dev/pve/root  /          ext4  errors=remount-ro  0  1\n"
+        "LABEL=boot     /boot      ext4  defaults           0  2\n"
+        "LABEL=PHERMESEFI /boot/efi vfat defaults           0  2\n"
+    )
 
 
 def grub_defaults_content() -> str:
@@ -83,10 +98,40 @@ def _teardown_policy_rcd(mount_point: str) -> None:
         os.unlink(path)
 
 
-def install_grub(mount_point: str, disk: str) -> None:
-    # --force: required for loop/virtual devices
-    # --no-nvram: skip EFI NVRAM update (not applicable in container)
-    run_cmd(["chroot", mount_point, "grub-install", "--force", "--no-nvram", disk])
+def mount_boot(mount_point: str, efi_device: str, boot_device: str) -> None:
+    """Mount /boot then /boot/efi inside the new root."""
+    boot_mp = os.path.join(mount_point, "boot")
+    os.makedirs(boot_mp, exist_ok=True)
+    run_cmd(["mount", boot_device, boot_mp])
+    efi_mp = os.path.join(boot_mp, "efi")
+    os.makedirs(efi_mp, exist_ok=True)
+    run_cmd(["mount", efi_device, efi_mp])
+
+
+def unmount_boot(mount_point: str) -> None:
+    run_cmd(["umount", "-l", os.path.join(mount_point, "boot/efi")], check=False)
+    run_cmd(["umount", "-l", os.path.join(mount_point, "boot")], check=False)
+
+
+def install_grub(mount_point: str) -> None:
+    """Install GRUB for UEFI in removable mode (boots on any machine, no NVRAM).
+
+    --removable writes to EFI/BOOT/BOOTX64.EFI so the SSD boots on any UEFI
+    firmware without a pre-registered boot entry — exactly what a portable
+    appliance needs. --no-nvram skips the efibootmgr call (no efivars in a
+    container). --target is explicit because the container has no efivars for
+    grub-install to auto-detect from.
+    """
+    run_cmd(
+        [
+            "chroot", mount_point, "grub-install",
+            "--target=x86_64-efi",
+            "--efi-directory=/boot/efi",
+            "--boot-directory=/boot",
+            "--removable",
+            "--no-nvram",
+        ]
+    )
     run_cmd(["chroot", mount_point, "update-grub"])
 
 
@@ -107,16 +152,40 @@ def fetch_proxmox_keyring(mount_point: str) -> None:
     run_cmd(["wget", "-qO", dest, PROXMOX_KEYRING_URL])
 
 
-def install_proxmox(mount_point: str, disk: str, luks_device: str) -> None:
-    """Full Proxmox VE installation sequence into a mounted chroot."""
+def install_proxmox(
+    mount_point: str,
+    disk: str,
+    luks_device: str,
+    efi_device: str,
+    boot_device: str,
+) -> None:
+    """Full Proxmox VE installation sequence into a mounted chroot.
+
+    The root LV is expected to be already mounted at `mount_point`. This formats
+    the EFI/boot partitions, debootstraps Debian, mounts /boot and /boot/efi,
+    installs Proxmox VE and a UEFI GRUB, and writes crypttab/fstab.
+    """
+    format_boot_partitions(efi_device, boot_device)
     run_debootstrap(mount_point)
+    mount_boot(mount_point, efi_device, boot_device)
+
     fetch_proxmox_keyring(mount_point)
 
     sources_path = os.path.join(mount_point, "etc/apt/sources.list")
     with open(sources_path, "w") as f:
         f.write(proxmox_apt_sources())
 
-    run_cmd(["chroot", mount_point, "apt-get", "update"])
+    crypttab_path = os.path.join(mount_point, "etc/crypttab")
+    with open(crypttab_path, "w") as f:
+        f.write(crypttab_entry(luks_device, "phermes_luks"))
+
+    fstab_path = os.path.join(mount_point, "etc/fstab")
+    with open(fstab_path, "w") as f:
+        f.write(fstab_content())
+
+    grub_path = os.path.join(mount_point, "etc/default/grub")
+    with open(grub_path, "w") as f:
+        f.write(grub_defaults_content())
 
     # /proc /sys /dev /dev/pts must be mounted for apt postinstall scripts,
     # grub-install, and update-initramfs to work inside the chroot.
@@ -124,23 +193,17 @@ def install_proxmox(mount_point: str, disk: str, luks_device: str) -> None:
     # policy-rc.d prevents service starts — no running systemd in chroot
     _setup_policy_rcd(mount_point)
     try:
+        run_cmd(["chroot", mount_point, "apt-get", "update"])
         chroot_apt_install(
             mount_point,
             "proxmox-ve", "postfix", "open-iscsi",
             "cryptsetup-initramfs", "dropbear-initramfs",
-            "grub-pc",
+            "grub-efi-amd64",
         )
 
-        crypttab_path = os.path.join(mount_point, "etc/crypttab")
-        with open(crypttab_path, "w") as f:
-            f.write(crypttab_entry(luks_device, "phermes_luks"))
-
-        grub_path = os.path.join(mount_point, "etc/default/grub")
-        with open(grub_path, "w") as f:
-            f.write(grub_defaults_content())
-
-        install_grub(mount_point, disk)
+        install_grub(mount_point)
         run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
     finally:
         _teardown_policy_rcd(mount_point)
         _unbind_chroot(mount_point)
+        unmount_boot(mount_point)
