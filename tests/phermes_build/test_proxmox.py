@@ -152,6 +152,21 @@ def test_lock_root_account(monkeypatch):
     assert any("root" in c for c in calls)
 
 
+def test_etc_hosts_content_resolves_hostname():
+    content = prox_mod.etc_hosts_content("phermes")
+    assert "127.0.0.1 localhost" in content
+    assert "phermes" in content
+
+
+def test_write_host_identity(tmp_path):
+    import os
+
+    os.makedirs(tmp_path / "etc")
+    prox_mod.write_host_identity(str(tmp_path), "phermes")
+    assert (tmp_path / "etc" / "hostname").read_text().strip() == "phermes"
+    assert "phermes" in (tmp_path / "etc" / "hosts").read_text()
+
+
 def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
     calls = _capture(monkeypatch)
     with patch("os.makedirs"):

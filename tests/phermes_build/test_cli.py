@@ -60,6 +60,7 @@ def _patch_all_steps(monkeypatch, called: list) -> None:
     monkeypatch.setattr(cli_mod, "_configure_host", lambda *a, **kw: called.append("host"))
     monkeypatch.setattr(cli_mod, "_provision_vms", lambda *a, **kw: called.append("vms"))
     monkeypatch.setattr(cli_mod, "_write_firstboot", lambda: called.append("firstboot"))
+    monkeypatch.setattr(cli_mod, "_install_toy_vm", lambda: called.append("toy"))
 
 
 def test_skip_os_install_omits_os_steps(monkeypatch):
@@ -119,6 +120,18 @@ def test_resolve_luks_passphrase():
     assert _resolve_luks_passphrase(False, "my-secret") == "my-secret"
     with pytest.raises(SystemExit):
         _resolve_luks_passphrase(False, None)
+
+
+def test_toy_vm_flag_adds_step(monkeypatch):
+    """--toy-vm appends the toy install step; absent, it does not run."""
+    called: list = []
+    _patch_all_steps(monkeypatch, called)
+    runner.invoke(app, ["/dev/sdb", "--dev-credentials", "--toy-vm"])
+    assert "toy" in called
+
+    called.clear()
+    runner.invoke(app, ["/dev/sdb", "--dev-credentials"])
+    assert "toy" not in called
 
 
 def test_setup_credentials_dev_sets_password_prod_locks(monkeypatch):

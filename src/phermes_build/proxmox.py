@@ -18,6 +18,26 @@ TEMP_ROOT_PASSWORD = "phermes-change-me"
 _CHROOT_BIND_MOUNTS = ["proc", "sys", "dev", "dev/pts"]
 
 
+DEFAULT_HOSTNAME = "phermes"
+
+
+def etc_hosts_content(hostname: str) -> str:
+    return (
+        "127.0.0.1 localhost\n"
+        f"127.0.1.1 {hostname}.local {hostname}\n"
+        "::1 localhost ip6-localhost ip6-loopback\n"
+    )
+
+
+def write_host_identity(mount_point: str, hostname: str = DEFAULT_HOSTNAME) -> None:
+    """Write /etc/hostname and /etc/hosts so the node name resolves — required
+    for pmxcfs (and thus qm/pveproxy) to start. The wizard can change it later."""
+    with open(os.path.join(mount_point, "etc/hostname"), "w") as f:
+        f.write(hostname + "\n")
+    with open(os.path.join(mount_point, "etc/hosts"), "w") as f:
+        f.write(etc_hosts_content(hostname))
+
+
 def set_root_password(mount_point: str, password: str) -> None:
     """Set the chroot's root password via chpasswd (dev only — wizard replaces it)."""
     run_cmd(["chroot", mount_point, "chpasswd"], input=f"root:{password}\n")
@@ -194,6 +214,9 @@ def install_proxmox(
     format_boot_partitions(efi_device, boot_device)
     run_debootstrap(mount_point)
     mount_boot(mount_point, efi_device, boot_device)
+    # Hostname must resolve before the Proxmox postinst runs, or pmxcfs/pveproxy
+    # fail to configure.
+    write_host_identity(mount_point)
 
     fetch_proxmox_keyring(mount_point)
 

@@ -96,19 +96,21 @@ smoke-run native="0":
         sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     fi
 
-# Full Proxmox install (verbose). Docker by default; override with native=1
-smoke-full native="0":
+# Full Proxmox install (verbose). Docker by default; native=1 host, toy=1 bundles a nested-VM demo
+smoke-full native="0" toy="0":
     #!/usr/bin/env bash
     set -euo pipefail
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
+    toy_flag=""
+    [ "{{toy}}" = "1" ] && toy_flag="--toy-vm"
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0 --verbose --dev-credentials
+        sudo phermes-build "$DISK" --share-size 0 --verbose --dev-credentials $toy_flag
     else
         # Bind-mount live src so the container always runs current code (the
         # image only provides the toolchain + deps); run 'just docker-build'
         # after changing dependencies.
-        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials $toy_flag
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk

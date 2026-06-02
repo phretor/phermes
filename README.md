@@ -197,6 +197,14 @@ just smoke-shell      # interactive shell in the build container
 just smoke-clean      # tear down and delete the image
 ```
 
+### Proving nested virtualization
+
+`just smoke-full toy=1` bundles a tiny Alpine guest into the build (dev only — production
+never ships an OS image). After booting the PHermes host and logging in, run
+`phermes-toy-vm` to have Proxmox start the guest with nested KVM and attach to its serial
+console — a hands-on proof that the appliance can host VMs. Requires host nested virt
+(`kvm_intel`/`kvm_amd nested=1`), which `smoke-qemu` exposes via `-cpu host`.
+
 `smoke-qemu` boots the built disk in QEMU through a small dedicated container
 (`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over
 VNC on `localhost:5900`. Pass `native=1` to run QEMU directly on the host instead (opens

@@ -5,7 +5,17 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from phermes_build import btrfs, exfat, host_config, luks, lvm, partitioner, proxmox, vm
+from phermes_build import (
+    btrfs,
+    exfat,
+    host_config,
+    luks,
+    lvm,
+    partitioner,
+    proxmox,
+    toy_vm,
+    vm,
+)
 from phermes_build.disk import compute_layout
 from phermes_build.firstboot import write_firstboot_flag, write_motd
 from phermes_build.models import AcquisitionMode, BuildConfig, VMConfig, VMFlavor
@@ -61,6 +71,12 @@ def build(
             help="LUKS passphrase for a production build (or set PHERMES_LUKS_PASSPHRASE)",
         ),
     ] = None,
+    toy: Annotated[
+        bool,
+        typer.Option(
+            "--toy-vm", help="DEV: bundle a tiny Linux guest to demo nested virtualization"
+        ),
+    ] = False,
 ) -> None:
     validate_disk_path(disk)
     set_verbose(verbose)
@@ -104,6 +120,9 @@ def build(
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
+    if toy and not skip_os_install:
+        os_steps.append(("Installing toy VM (dev)", lambda: _install_toy_vm()))
+
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
     if verbose:
@@ -170,6 +189,10 @@ def _setup_credentials(dev_credentials: bool) -> None:
         proxmox.set_root_password(PVE_ROOT_MOUNT, proxmox.TEMP_ROOT_PASSWORD)
     else:
         proxmox.lock_root_account(PVE_ROOT_MOUNT)
+
+
+def _install_toy_vm() -> None:
+    toy_vm.install_toy_vm(PVE_ROOT_MOUNT)
 
 
 def _setup_luks(layout, cfg: BuildConfig) -> None:
