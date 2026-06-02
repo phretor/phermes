@@ -38,8 +38,12 @@ docker-build:
     docker build -t phermes-build .
 
 # Run phermes-build via Docker against a real block device: just docker-run /dev/sdX
+#
+# -v /dev:/dev shares the host device tree so partition nodes created during
+# the run (sdX1, loop0p1, ...) are visible inside the container. --privileged
+# is required for cryptsetup, LVM, and mount.
 docker-run disk:
-    sudo docker run --rm --privileged --device={{disk}} phermes-build {{disk}}
+    sudo docker run --rm --privileged -v /dev:/dev phermes-build {{disk}}
 
 # ── Smoke testing (loop device) ───────────────────────────────────────────────
 #
@@ -77,7 +81,7 @@ smoke-run native="0":
     if [ "{{native}}" = "1" ]; then
         sudo phermes-build "$DISK" --share-size 0 --skip-os-install
     else
-        sudo docker run --rm --privileged --device="$DISK" phermes-build "$DISK" --share-size 0 --skip-os-install
+        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --skip-os-install
     fi
 
 # Full Proxmox install. Docker by default; override with native=1
@@ -89,7 +93,7 @@ smoke-full native="0":
     if [ "{{native}}" = "1" ]; then
         sudo phermes-build "$DISK" --share-size 0
     else
-        sudo docker run --rm --privileged --device="$DISK" phermes-build "$DISK" --share-size 0
+        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk
