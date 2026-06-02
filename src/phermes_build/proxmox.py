@@ -9,8 +9,18 @@ PROXMOX_KEYRING_URL = (
 )
 PROXMOX_KEYRING_PATH = "/etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg"
 
+# Temporary root password set at build time so the console is loginable for
+# setup and recovery. The first-boot wizard replaces it. Same convention as the
+# temporary LUKS passphrase.
+TEMP_ROOT_PASSWORD = "phermes-change-me"
+
 # Bind-mounts required for chroot apt-get and postinstall scripts.
 _CHROOT_BIND_MOUNTS = ["proc", "sys", "dev", "dev/pts"]
+
+
+def set_root_password(mount_point: str, password: str) -> None:
+    """Set the chroot's root password via chpasswd (temporary, wizard replaces it)."""
+    run_cmd(["chroot", mount_point, "chpasswd"], input=f"root:{password}\n")
 
 
 def format_root_lv(device: str) -> None:
@@ -209,6 +219,7 @@ def install_proxmox(
             "grub-efi-amd64",
         )
 
+        set_root_password(mount_point, TEMP_ROOT_PASSWORD)
         install_grub(mount_point)
         run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
     finally:

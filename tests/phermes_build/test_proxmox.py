@@ -129,6 +129,21 @@ def test_chroot_apt_install_sets_debian_frontend(monkeypatch):
     assert any("DEBIAN_FRONTEND=noninteractive" in str(c) for c in calls)
 
 
+def test_set_root_password(monkeypatch):
+    received = {}
+
+    def fake_run(cmd, *, input=None, check=True):  # noqa: A002
+        received["cmd"] = cmd
+        received["input"] = input
+        return ""
+
+    monkeypatch.setattr(prox_mod, "run_cmd", fake_run)
+    prox_mod.set_root_password("/mnt/pve-root", "secret123")
+    assert "chpasswd" in received["cmd"]
+    assert "chroot" in received["cmd"]
+    assert received["input"] == "root:secret123\n"
+
+
 def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
     calls = _capture(monkeypatch)
     with patch("os.makedirs"):
