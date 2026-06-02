@@ -114,14 +114,22 @@ smoke-clean:
     set -euo pipefail
     # Teardown is the reverse of setup: the pve VG sits on the LUKS mapping, which
     # sits on the loop partition. Closing LUKS before deactivating the VG fails
-    # ("device in use"), so order matters. The VG is removed only when it actually
-    # sits on our phermes_luks device — this never touches a real pve VG.
+    # ("device in use"), so order matters.
+    #
+    # The pve VG is removed when it belongs to a smoke run: its PV is our LUKS
+    # mapping, or the PV is missing/unknown (orphaned by a crashed run whose loop
+    # is gone). A real Proxmox pve VG sits on a present physical disk and is left
+    # untouched. With udev disabled, LVM can also leave an empty /dev/pve behind.
     DISK=$(cat {{_smoke_state}} 2>/dev/null || true)
-    if sudo vgs --noheadings -o pv_name pve 2>/dev/null | grep -q phermes_luks; then
+    pv=$(sudo vgs --noheadings -o pv_name pve 2>/dev/null | tr -d '[:space:]' || true)
+    if [ "$pv" = "/dev/mapper/phermes_luks" ] || printf '%s' "$pv" | grep -q 'unknown'; then
         sudo vgchange -an pve >/dev/null 2>&1 || true
         sudo vgremove -f pve >/dev/null 2>&1 || true
     fi
     sudo cryptsetup luksClose phermes_luks 2>/dev/null || true
+    if ! sudo vgs pve >/dev/null 2>&1; then
+        sudo rm -rf /dev/pve 2>/dev/null || true
+    fi
     [ -n "$DISK" ] && sudo losetup -d "$DISK" 2>/dev/null || true
     rm -f {{_smoke_image}} {{_smoke_state}}
     echo "Done."
