@@ -48,7 +48,8 @@ def test_partition_table_created(loop_device):
     result = subprocess.run(
         ["sfdisk", "-l", loop_device], capture_output=True, text=True
     )
-    assert "GPT" in result.stdout
+    # sfdisk reports the label as "gpt" (newer util-linux) or "GPT" (older).
+    assert "gpt" in result.stdout.lower()
 
 
 @pytest.mark.integration
