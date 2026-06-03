@@ -11,9 +11,9 @@ from phermes_build import (
     host_config,
     luks,
     lvm,
+    node_vm,
     partitioner,
     proxmox,
-    toy_vm,
     vm,
 )
 from phermes_build.disk import compute_layout
@@ -71,10 +71,11 @@ def build(
             help="LUKS passphrase for a production build (or set PHERMES_LUKS_PASSPHRASE)",
         ),
     ] = None,
-    toy: Annotated[
+    linux_node: Annotated[
         bool,
         typer.Option(
-            "--toy-vm", help="DEV: bundle a tiny Linux guest to demo nested virtualization"
+            "--linux-node",
+            help="DEV: bundle a Debian node guest (cloud-init, SSH) to run Hermes / demo nesting",
         ),
     ] = False,
     dev_ssh_pubkey: Annotated[
@@ -130,8 +131,8 @@ def build(
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
-    if toy and not skip_os_install:
-        os_steps.append(("Installing toy VM (dev)", lambda: _install_toy_vm()))
+    if linux_node and not skip_os_install:
+        os_steps.append(("Installing Linux node VM (dev)", lambda: _install_node_vm()))
 
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
@@ -204,8 +205,8 @@ def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None)
         proxmox.lock_root_account(PVE_ROOT_MOUNT)
 
 
-def _install_toy_vm() -> None:
-    toy_vm.install_toy_vm(PVE_ROOT_MOUNT)
+def _install_node_vm() -> None:
+    node_vm.install_node_vm(PVE_ROOT_MOUNT)
 
 
 def _setup_luks(layout, cfg: BuildConfig) -> None:

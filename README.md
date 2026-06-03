@@ -197,13 +197,21 @@ just smoke-shell      # interactive shell in the build container
 just smoke-clean      # tear down and delete the image
 ```
 
-### Proving nested virtualization
+### Running a Linux node guest (nested)
 
-`just smoke-full-toy` bundles a tiny Alpine guest into the build (dev only — production
-never ships an OS image). After booting the PHermes host and logging in, run
-`phermes-toy-vm` to have Proxmox start the guest with nested KVM and attach to its serial
-console — a hands-on proof that the appliance can host VMs. Requires host nested virt
-(`kvm_intel`/`kvm_amd nested=1`), which `smoke-qemu` exposes via `-cpu host`.
+`just smoke-full-node` bundles a Debian cloud image into the build (dev only — production
+never ships an OS image). After booting the PHermes host, `phermes-node` has Proxmox start
+it as a nested KVM guest, configured via cloud-init (a `dev` user with your `.dev-ssh` key,
+a static IP on an internal NAT bridge). Then:
+
+```bash
+just smoke-node          # boot the node, attach its serial console
+just smoke-node-ssh      # SSH in as dev@10.10.10.2 (jumps through the PHermes host)
+```
+
+glibc (Debian, not Alpine/musl) so the Python/ML wheel ecosystem works — i.e. it can
+actually run the Hermes runtime. Requires host nested virt (`kvm_intel`/`kvm_amd
+nested=1`), which `smoke-qemu` exposes via `-cpu host`.
 
 `smoke-qemu` boots the built disk in QEMU through a small dedicated container
 (`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over

@@ -186,6 +186,14 @@ def test_network_interfaces_content_static():
     assert prox_mod.SMOKE_GATEWAY in content
 
 
+def test_network_interfaces_has_nat_bridge_for_guests():
+    content = prox_mod.network_interfaces_content("eth0")
+    assert "auto vmbr0" in content
+    assert prox_mod.VMBR0_CIDR in content
+    assert "ip_forward=1" in content
+    assert "MASQUERADE" in content
+
+
 def test_write_network_interfaces(tmp_path):
     prox_mod.write_network_interfaces(str(tmp_path))
     text = (tmp_path / "etc" / "network" / "interfaces").read_text()

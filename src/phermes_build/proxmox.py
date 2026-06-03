@@ -29,6 +29,11 @@ SMOKE_CIDR = "10.0.2.15/24"
 SMOKE_GATEWAY = "10.0.2.2"
 SMOKE_DNS = "10.0.2.3"
 
+# Internal bridge for guest VMs, NATed out the uplink so guests reach the
+# internet. The first-boot wizard configures real bridging/addressing.
+VMBR0_CIDR = "10.10.10.1/24"
+VMBR0_NET = "10.10.10.0/24"
+
 
 def etc_hosts_content(hostname: str, address: str = SMOKE_ADDRESS) -> str:
     return (
@@ -120,6 +125,16 @@ def network_interfaces_content(nic: str = "eth0") -> str:
         f"    address {SMOKE_CIDR}\n"
         f"    gateway {SMOKE_GATEWAY}\n"
         f"    dns-nameservers {SMOKE_DNS}\n"
+        "\n"
+        "auto vmbr0\n"
+        "iface vmbr0 inet static\n"
+        f"    address {VMBR0_CIDR}\n"
+        "    bridge-ports none\n"
+        "    bridge-stp off\n"
+        "    bridge-fd 0\n"
+        "    post-up sysctl -w net.ipv4.ip_forward=1\n"
+        f"    post-up iptables -t nat -A POSTROUTING -s {VMBR0_NET} -o {nic} -j MASQUERADE\n"
+        f"    post-down iptables -t nat -D POSTROUTING -s {VMBR0_NET} -o {nic} -j MASQUERADE\n"
     )
 
 
@@ -366,7 +381,7 @@ def install_proxmox(
             mount_point,
             "proxmox-ve", "postfix", "open-iscsi",
             "cryptsetup-initramfs", "dropbear-initramfs",
-            "grub-efi-amd64", "openssh-server", "isc-dhcp-client",
+            "grub-efi-amd64", "openssh-server", "isc-dhcp-client", "iptables",
         )
 
         install_grub(mount_point)
