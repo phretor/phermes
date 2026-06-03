@@ -177,17 +177,46 @@ def test_write_host_identity(tmp_path):
     assert "phermes" in (tmp_path / "etc" / "hosts").read_text()
 
 
-def test_network_interfaces_content_dhcp():
+def test_network_interfaces_content_static():
     content = prox_mod.network_interfaces_content("eth0")
     assert "iface lo inet loopback" in content
     assert "auto eth0" in content
-    assert "iface eth0 inet dhcp" in content
+    assert "iface eth0 inet static" in content
+    assert prox_mod.SMOKE_CIDR in content
+    assert prox_mod.SMOKE_GATEWAY in content
 
 
 def test_write_network_interfaces(tmp_path):
     prox_mod.write_network_interfaces(str(tmp_path))
     text = (tmp_path / "etc" / "network" / "interfaces").read_text()
-    assert "iface eth0 inet dhcp" in text
+    assert "iface eth0 inet static" in text
+    assert prox_mod.SMOKE_ADDRESS in text
+
+
+def test_pve_init_script_creates_node_dir_and_storage():
+    s = prox_mod.pve_init_script()
+    assert "/etc/pve/nodes/$node/qemu-server" in s
+    assert "lvmthin: local-lvm" in s
+    assert "thinpool data" in s
+    assert "content rootdir,images" in s
+
+
+def test_install_pve_firstboot_init(tmp_path):
+    prox_mod.install_pve_firstboot_init(str(tmp_path))
+    script = tmp_path / "usr/local/sbin/phermes-pve-init.sh"
+    assert script.exists()
+    assert oct(script.stat().st_mode)[-3:] == "755"
+    svc = tmp_path / "etc/systemd/system/phermes-pve-init.service"
+    assert "After=pve-cluster.service" in svc.read_text()
+    link = tmp_path / "etc/systemd/system/multi-user.target.wants/phermes-pve-init.service"
+    assert link.is_symlink()
+
+
+def test_etc_hosts_maps_hostname_to_nonloopback():
+    content = prox_mod.etc_hosts_content("phermes")
+    # pmxcfs requires the node name on a non-loopback address
+    assert f"{prox_mod.SMOKE_ADDRESS} phermes.local phermes" in content
+    assert "127.0.1.1" not in content
 
 
 def test_grub_forces_predictable_nic_name():

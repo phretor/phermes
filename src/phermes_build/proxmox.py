@@ -20,11 +20,20 @@ _CHROOT_BIND_MOUNTS = ["proc", "sys", "dev", "dev/pts"]
 
 DEFAULT_HOSTNAME = "phermes"
 
+# Provisional static network matching QEMU's user-mode (slirp) defaults. pmxcfs
+# requires the node name to resolve to a NON-loopback IP, so the host needs a
+# real, statically known address. The first-boot wizard replaces all of this
+# with the operator's real network configuration.
+SMOKE_ADDRESS = "10.0.2.15"
+SMOKE_CIDR = "10.0.2.15/24"
+SMOKE_GATEWAY = "10.0.2.2"
+SMOKE_DNS = "10.0.2.3"
 
-def etc_hosts_content(hostname: str) -> str:
+
+def etc_hosts_content(hostname: str, address: str = SMOKE_ADDRESS) -> str:
     return (
         "127.0.0.1 localhost\n"
-        f"127.0.1.1 {hostname}.local {hostname}\n"
+        f"{address} {hostname}.local {hostname}\n"
         "::1 localhost ip6-localhost ip6-loopback\n"
     )
 
@@ -38,20 +47,87 @@ def write_host_identity(mount_point: str, hostname: str = DEFAULT_HOSTNAME) -> N
         f.write(etc_hosts_content(hostname))
 
 
+def pve_init_script() -> str:
+    """Runtime first-boot init: create the node dir tree and default storage that
+    Proxmox normally sets up during ISO install — skipped by our chroot build."""
+    return (
+        "#!/bin/sh\n"
+        "set -e\n"
+        "# Wait for the Proxmox cluster filesystem to mount.\n"
+        "for _ in $(seq 1 30); do mountpoint -q /etc/pve && break; sleep 1; done\n"
+        "node=$(hostname)\n"
+        'mkdir -p "/etc/pve/nodes/$node/qemu-server" "/etc/pve/nodes/$node/lxc"\n'
+        "if [ ! -f /etc/pve/storage.cfg ]; then\n"
+        "  cat > /etc/pve/storage.cfg <<'EOF'\n"
+        "dir: local\n"
+        "\tpath /var/lib/vz\n"
+        "\tcontent iso,vztmpl,backup\n"
+        "\n"
+        "lvmthin: local-lvm\n"
+        "\tthinpool data\n"
+        "\tvgname pve\n"
+        "\tcontent rootdir,images\n"
+        "EOF\n"
+        "fi\n"
+    )
+
+
+def pve_init_service() -> str:
+    return (
+        "[Unit]\n"
+        "Description=PHermes Proxmox first-boot initialization\n"
+        "After=pve-cluster.service\n"
+        "Requires=pve-cluster.service\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "ExecStart=/usr/local/sbin/phermes-pve-init.sh\n"
+        "RemainAfterExit=yes\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+
+
+def install_pve_firstboot_init(mount_point: str) -> None:
+    """Install + enable the Proxmox first-boot init oneshot."""
+    script = os.path.join(mount_point, "usr/local/sbin/phermes-pve-init.sh")
+    os.makedirs(os.path.dirname(script), exist_ok=True)
+    with open(script, "w") as f:
+        f.write(pve_init_script())
+    os.chmod(script, 0o755)
+
+    svc = os.path.join(mount_point, "etc/systemd/system/phermes-pve-init.service")
+    os.makedirs(os.path.dirname(svc), exist_ok=True)
+    with open(svc, "w") as f:
+        f.write(pve_init_service())
+
+    # Enable by creating the wants symlink (no running systemd in the chroot).
+    wants = os.path.join(mount_point, "etc/systemd/system/multi-user.target.wants")
+    os.makedirs(wants, exist_ok=True)
+    link = os.path.join(wants, "phermes-pve-init.service")
+    if not os.path.islink(link):
+        os.symlink("/etc/systemd/system/phermes-pve-init.service", link)
+
+
 def network_interfaces_content(nic: str = "eth0") -> str:
     return (
         "auto lo\n"
         "iface lo inet loopback\n"
         "\n"
         f"auto {nic}\n"
-        f"iface {nic} inet dhcp\n"
+        f"iface {nic} inet static\n"
+        f"    address {SMOKE_CIDR}\n"
+        f"    gateway {SMOKE_GATEWAY}\n"
+        f"    dns-nameservers {SMOKE_DNS}\n"
     )
 
 
 def write_network_interfaces(mount_point: str, nic: str = "eth0") -> None:
-    """Bring the primary NIC up via DHCP so the host is reachable. A provisional
-    default — the first-boot wizard configures vmbr0 / static addressing. The NIC
-    is named eth0 via net.ifnames=0 in the kernel cmdline so this is predictable."""
+    """Give the host a static IP so it is reachable and its node name resolves to
+    a non-loopback address (pmxcfs requires this). Matches QEMU slirp; a
+    provisional default the first-boot wizard replaces. The NIC is named eth0 via
+    net.ifnames=0 in the kernel cmdline so this is predictable."""
     path = os.path.join(mount_point, "etc/network/interfaces")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -259,6 +335,7 @@ def install_proxmox(
     # fail to configure.
     write_host_identity(mount_point)
     write_network_interfaces(mount_point)
+    install_pve_firstboot_init(mount_point)
 
     fetch_proxmox_keyring(mount_point)
 
