@@ -310,3 +310,42 @@ async fn readopt_clears_a_dead_vm_record() {
     let reloaded = phermesd::state::State::load(&dir.path().join("state.json")).unwrap();
     assert!(reloaded.active.is_none());
 }
+
+struct LivenessLauncher {
+    alive: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Launcher for LivenessLauncher {
+    async fn launch(&self, _vm: &Vm, _argv: &[String], _rt: &RuntimePaths) -> Result<Spawned, SupervisorError> {
+        Ok(Spawned {
+            pid: 5000,
+            qmp: Box::new(MockQmp { shutdown_on_powerdown: true, powered_down: Arc::new(AtomicBool::new(false)) }),
+        })
+    }
+    async fn reconnect(&self, _rt: &RuntimePaths) -> Result<Box<dyn QmpControl>, SupervisorError> {
+        Ok(Box::new(MockQmp { shutdown_on_powerdown: true, powered_down: Arc::new(AtomicBool::new(false)) }))
+    }
+    fn force_kill(&self, _pid: i32) {}
+    fn cleanup(&self, _rt: &RuntimePaths) {}
+    fn is_alive(&self, _pid: i32) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+}
+
+#[tokio::test]
+async fn status_reports_failed_when_active_pid_dies() {
+    let dir = tempfile::tempdir().unwrap();
+    let alive = Arc::new(AtomicBool::new(true));
+    let mut sup = Supervisor::new(
+        vec![vm("linux")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(LivenessLauncher { alive: alive.clone() }),
+    );
+    let info = sup.activate("linux").await.unwrap();
+    assert_eq!(info.state, VmState::Running);
+    alive.store(false, Ordering::SeqCst);
+    assert_eq!(sup.status(None).unwrap().state, VmState::Failed);
+}

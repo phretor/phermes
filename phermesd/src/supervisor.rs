@@ -111,8 +111,13 @@ impl Supervisor {
         let (state, pid, qmp, serial, vnc) = match active {
             Some(a) => {
                 let rt = &a.rt;
+                let state = if self.launcher.is_alive(a.pid) {
+                    a.state
+                } else {
+                    VmState::Failed
+                };
                 (
-                    a.state,
+                    state,
                     Some(a.pid),
                     Some(rt.qmp.clone()),
                     vm.def.console.serial.then(|| rt.serial.clone()),
