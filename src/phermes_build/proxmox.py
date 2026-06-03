@@ -38,6 +38,26 @@ def write_host_identity(mount_point: str, hostname: str = DEFAULT_HOSTNAME) -> N
         f.write(etc_hosts_content(hostname))
 
 
+def network_interfaces_content(nic: str = "eth0") -> str:
+    return (
+        "auto lo\n"
+        "iface lo inet loopback\n"
+        "\n"
+        f"auto {nic}\n"
+        f"iface {nic} inet dhcp\n"
+    )
+
+
+def write_network_interfaces(mount_point: str, nic: str = "eth0") -> None:
+    """Bring the primary NIC up via DHCP so the host is reachable. A provisional
+    default — the first-boot wizard configures vmbr0 / static addressing. The NIC
+    is named eth0 via net.ifnames=0 in the kernel cmdline so this is predictable."""
+    path = os.path.join(mount_point, "etc/network/interfaces")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(network_interfaces_content(nic))
+
+
 def set_root_password(mount_point: str, password: str) -> None:
     """Set the chroot's root password via chpasswd (dev only — wizard replaces it)."""
     run_cmd(["chroot", mount_point, "chpasswd"], input=f"root:{password}\n")
@@ -126,7 +146,9 @@ def grub_defaults_content() -> str:
         # local display/keyboard (and the VNC console) own /dev/console — that
         # is where the interactive LUKS prompt appears. Boot logs still mirror
         # to serial; headless unlock uses Dropbear over SSH.
-        'GRUB_CMDLINE_LINUX="console=ttyS0,115200 console=tty0"\n'
+        # net.ifnames=0 forces the primary NIC to eth0 so the network config is
+        # predictable across hardware (and QEMU).
+        'GRUB_CMDLINE_LINUX="console=ttyS0,115200 console=tty0 net.ifnames=0"\n'
         'GRUB_ENABLE_CRYPTODISK=y\n'
         # Prevent os-prober from scanning host partitions inside a container
         'GRUB_DISABLE_OS_PROBER=true\n'
@@ -236,6 +258,7 @@ def install_proxmox(
     # Hostname must resolve before the Proxmox postinst runs, or pmxcfs/pveproxy
     # fail to configure.
     write_host_identity(mount_point)
+    write_network_interfaces(mount_point)
 
     fetch_proxmox_keyring(mount_point)
 
@@ -266,7 +289,7 @@ def install_proxmox(
             mount_point,
             "proxmox-ve", "postfix", "open-iscsi",
             "cryptsetup-initramfs", "dropbear-initramfs",
-            "grub-efi-amd64", "openssh-server",
+            "grub-efi-amd64", "openssh-server", "isc-dhcp-client",
         )
 
         install_grub(mount_point)

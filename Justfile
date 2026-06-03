@@ -157,9 +157,15 @@ smoke-qemu native="0" serial="0":
 
 # SSH into the booted host as root (dev key); pass a command to run it: just smoke-ssh "qm list"
 smoke-ssh command="":
-    ssh -p 2200 -i .dev-ssh/id_ed25519 \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-        root@localhost {{command}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(-p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+    if [ -n "{{command}}" ]; then
+        ssh "${args[@]}" root@localhost "{{command}}"
+    else
+        ssh "${args[@]}" root@localhost
+    fi
 
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:

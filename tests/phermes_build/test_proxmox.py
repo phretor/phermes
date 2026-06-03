@@ -177,6 +177,23 @@ def test_write_host_identity(tmp_path):
     assert "phermes" in (tmp_path / "etc" / "hosts").read_text()
 
 
+def test_network_interfaces_content_dhcp():
+    content = prox_mod.network_interfaces_content("eth0")
+    assert "iface lo inet loopback" in content
+    assert "auto eth0" in content
+    assert "iface eth0 inet dhcp" in content
+
+
+def test_write_network_interfaces(tmp_path):
+    prox_mod.write_network_interfaces(str(tmp_path))
+    text = (tmp_path / "etc" / "network" / "interfaces").read_text()
+    assert "iface eth0 inet dhcp" in text
+
+
+def test_grub_forces_predictable_nic_name():
+    assert "net.ifnames=0" in prox_mod.grub_defaults_content()
+
+
 def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
     calls = _capture(monkeypatch)
     with patch("os.makedirs"):
