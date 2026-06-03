@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from phermes_build import proxmox as prox_mod
 
 
@@ -27,10 +29,47 @@ def test_proxmox_apt_sources_content():
     assert "bookworm" in content
 
 
-def test_install_grub_called(monkeypatch):
+def test_install_grub_uefi_removable(monkeypatch):
     calls = _capture(monkeypatch)
-    prox_mod.install_grub("/mnt/pve-root", "/dev/sdb")
-    assert any("grub-install" in str(c) for c in calls)
+    prox_mod.install_grub("/mnt/pve-root")
+    grub_calls = [c for c in calls if "grub-install" in c]
+    assert grub_calls
+    grub = grub_calls[0]
+    assert "--target=x86_64-efi" in grub
+    assert "--removable" in grub
+    assert "--efi-directory=/boot/efi" in grub
+
+
+def test_install_grub_runs_update_grub(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.install_grub("/mnt/pve-root")
+    assert any("update-grub" in c for c in calls)
+
+
+def test_format_boot_partitions(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.format_boot_partitions("/dev/loop0p1", "/dev/loop0p2")
+    assert any("mkfs.vfat" in c[0] for c in calls)
+    assert any("mkfs.ext4" in c[0] for c in calls)
+    assert any("/dev/loop0p1" in c for c in calls)
+    assert any("/dev/loop0p2" in c for c in calls)
+
+
+def test_mount_boot_order(monkeypatch):
+    calls = _capture(monkeypatch)
+    with patch("os.makedirs"):
+        prox_mod.mount_boot("/mnt/pve-root", "/dev/loop0p1", "/dev/loop0p2")
+    mounts = [c for c in calls if c[0] == "mount"]
+    # /boot must be mounted before /boot/efi
+    assert mounts[0][-1].endswith("/boot")
+    assert mounts[1][-1].endswith("/boot/efi")
+
+
+def test_fstab_content():
+    content = prox_mod.fstab_content()
+    assert "/dev/pve/root" in content
+    assert "LABEL=boot" in content
+    assert "/boot/efi" in content
 
 
 def test_crypttab_content():
@@ -46,11 +85,61 @@ def test_crypttab_content():
 def test_grub_defaults_content():
     content = prox_mod.grub_defaults_content()
     assert "GRUB_ENABLE_CRYPTODISK=y" in content
+    assert "GRUB_DISABLE_OS_PROBER=true" in content
+
+
+def test_install_grub_uses_no_nvram(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.install_grub("/mnt/pve-root")
+    assert any("--no-nvram" in c for c in calls)
+
+
+def test_setup_policy_rcd_creates_file(tmp_path):
+    prox_mod._setup_policy_rcd(str(tmp_path))
+    policy = tmp_path / "usr" / "sbin" / "policy-rc.d"
+    assert policy.exists()
+    assert "exit 101" in policy.read_text()
+    assert oct(policy.stat().st_mode)[-3:] == "755"
+
+
+def test_teardown_policy_rcd_removes_file(tmp_path):
+    prox_mod._setup_policy_rcd(str(tmp_path))
+    prox_mod._teardown_policy_rcd(str(tmp_path))
+    assert not (tmp_path / "usr" / "sbin" / "policy-rc.d").exists()
+
+
+def test_teardown_policy_rcd_idempotent(tmp_path):
+    prox_mod._teardown_policy_rcd(str(tmp_path))  # should not raise
 
 
 def test_chroot_apt_install(monkeypatch):
     calls = _capture(monkeypatch)
     prox_mod.chroot_apt_install("/mnt/pve-root", "proxmox-ve", "postfix")
-    assert any("chroot" in c[0] for c in calls)
-    assert any("apt-get" in c for c in calls)
-    assert any("proxmox-ve" in c for c in calls)
+    # env prefix wraps the command — search across the full command list
+    assert any("chroot" in str(c) for c in calls)
+    assert any("apt-get" in str(c) for c in calls)
+    assert any("proxmox-ve" in str(c) for c in calls)
+
+
+def test_chroot_apt_install_sets_debian_frontend(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.chroot_apt_install("/mnt/pve-root", "proxmox-ve")
+    assert any("DEBIAN_FRONTEND=noninteractive" in str(c) for c in calls)
+
+
+def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):
+    calls = _capture(monkeypatch)
+    with patch("os.makedirs"):
+        prox_mod._bind_chroot(str(tmp_path))
+    mount_calls = [c for c in calls if c[0] == "mount"]
+    mounted = [c[-1] for c in mount_calls]
+    assert any("proc" in m for m in mounted)
+    assert any("sys" in m for m in mounted)
+    assert any("/dev" in m for m in mounted)
+
+
+def test_unbind_chroot_unmounts_all_dirs(monkeypatch, tmp_path):
+    calls = _capture(monkeypatch)
+    prox_mod._unbind_chroot(str(tmp_path))
+    umount_calls = [c for c in calls if "umount" in c[0]]
+    assert len(umount_calls) == len(prox_mod._CHROOT_BIND_MOUNTS)

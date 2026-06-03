@@ -138,8 +138,16 @@ def _setup_exfat(layout) -> None:
 def _install_proxmox(layout) -> None:
     os.makedirs(PVE_ROOT_MOUNT, exist_ok=True)
     run_cmd(["mount", "/dev/pve/root", PVE_ROOT_MOUNT])
+    efi_part = partitioner.partition_path(layout.disk, 1)
+    boot_part = partitioner.partition_path(layout.disk, 2)
     luks_part = partitioner.partition_path(layout.disk, 3)
-    proxmox.install_proxmox(PVE_ROOT_MOUNT, layout.disk, luks_part)
+    proxmox.install_proxmox(
+        PVE_ROOT_MOUNT,
+        layout.disk,
+        luks_part,
+        efi_device=efi_part,
+        boot_device=boot_part,
+    )
 
 
 def _configure_host(layout, cfg: BuildConfig) -> None:
