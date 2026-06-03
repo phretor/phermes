@@ -2,6 +2,7 @@
 name = "phermes-build"
 version = "0.1.0"
 description = "PHermes SSD appliance builder"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     "typer==0.26.5",
