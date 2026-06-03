@@ -81,6 +81,20 @@ PHermes is designed for users who treat their AI environment as infrastructure w
   LVM-thin snapshot of the VM disk and a Btrfs snapshot of user data before touching
   anything. One command rolls everything back.
 
+### Threat model
+
+PHermes protects **data at rest** (LUKS2): a lost or stolen device is unreadable without
+the passphrase. It deliberately does **not** protect **boot-chain integrity** — `/boot`
+and the EFI partition are plaintext and unsigned, and the platform firmware is a trusted,
+unverified root of trust. On a *portable* device that boots on arbitrary hardware, the host
+firmware and an evil-maid attacker on the boot chain are largely out of scope to defend;
+the LUKS passphrase and physical control carry the weight. A future *fixed-install* mode
+(Secure Boot + signed UKI + TPM-sealed unlock) is the path to boot integrity for users who
+trade portability for tamper-evidence.
+
+Full STRIDE analysis — assets, trust boundaries, per-category threats, mitigations, and
+residual risks: **[`docs/threat-model.md`](docs/threat-model.md)**.
+
 ## Personalisation
 
 PHermes is not a fixed appliance. It adapts to how you work.
