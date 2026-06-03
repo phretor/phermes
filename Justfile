@@ -167,6 +167,12 @@ smoke-ssh command="":
         ssh "${args[@]}" root@localhost
     fi
 
+# Boot the toy VM and attach to its serial console (exit qm terminal with Ctrl-O)
+smoke-toy:
+    ssh -t -p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        root@localhost "phermes-toy-vm"
+
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:
     #!/usr/bin/env bash
