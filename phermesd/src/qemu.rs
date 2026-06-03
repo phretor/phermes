@@ -16,7 +16,7 @@ pub struct RuntimePaths {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum QemuError {
-    #[error("flavor {0:?} is not supported in slice #1 (linux only)")]
+    #[error("flavor {0:?} is not yet supported (linux only)")]
     UnsupportedFlavor(Flavor),
 }
 
