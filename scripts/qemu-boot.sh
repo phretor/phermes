@@ -57,10 +57,10 @@ args=(
   -drive "if=pflash,format=raw,file=$vars"
   -drive "file=$IMAGE,format=raw,if=virtio"
   -snapshot
-  # User-mode NIC so networking doesn't stall the boot. Forward host 2222 to the
-  # guest's Dropbear (initramfs SSH) so the LUKS volume can be unlocked with
-  # `ssh -p 2222 root@localhost` instead of typing at the console.
-  -netdev user,id=net0,hostfwd=tcp::2222-:2222
+  # User-mode NIC so networking doesn't stall the boot. Forwards:
+  #   2222 -> guest 2222  Dropbear (initramfs SSH) for headless LUKS unlock
+  #   2200 -> guest 22     the booted host's sshd (dev builds permit root login)
+  -netdev user,id=net0,hostfwd=tcp::2222-:2222,hostfwd=tcp::2200-:22
   -device virtio-net-pci,netdev=net0
 )
 

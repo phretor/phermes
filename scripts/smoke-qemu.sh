@@ -59,9 +59,10 @@ if [ -e /dev/kvm ]; then
   run_args+=(--device /dev/kvm --group-add "$(stat -c '%g' /dev/kvm)")
 fi
 
-# Publish the guest's Dropbear port so `ssh -p 2222 root@localhost` reaches it
-# (host -> container -> QEMU hostfwd -> guest initramfs) to unlock LUKS remotely.
-run_args+=(-p 2222:2222)
+# Publish the guest's Dropbear port (2222, initramfs unlock) and the booted
+# host's sshd (2200 -> guest 22) so both reach through host -> container ->
+# QEMU hostfwd -> guest.
+run_args+=(-p 2222:2222 -p 2200:2200)
 
 # Serial mode streams the boot to this terminal; otherwise serve the display
 # over VNC on a published port.

@@ -50,6 +50,25 @@ def lock_root_account(mount_point: str) -> None:
     run_cmd(["chroot", mount_point, "passwd", "--lock", "root"])
 
 
+def enable_dev_root_ssh(mount_point: str, pubkey: str) -> None:
+    """DEV ONLY: allow root SSH (key + password) and install an authorized key.
+
+    Never called for production builds — there root is locked and the default
+    sshd config (prohibit-password) applies, so root SSH is impossible."""
+    ssh_dir = os.path.join(mount_point, "root/.ssh")
+    os.makedirs(ssh_dir, exist_ok=True)
+    os.chmod(ssh_dir, 0o700)
+    auth = os.path.join(ssh_dir, "authorized_keys")
+    with open(auth, "w") as f:
+        f.write(pubkey.rstrip("\n") + "\n")
+    os.chmod(auth, 0o600)
+
+    dropin_dir = os.path.join(mount_point, "etc/ssh/sshd_config.d")
+    os.makedirs(dropin_dir, exist_ok=True)
+    with open(os.path.join(dropin_dir, "phermes-dev.conf"), "w") as f:
+        f.write("PermitRootLogin yes\n")
+
+
 def format_root_lv(device: str) -> None:
     run_cmd(["mkfs.ext4", "-F", "-L", "pve-root", device])
 
@@ -247,7 +266,7 @@ def install_proxmox(
             mount_point,
             "proxmox-ve", "postfix", "open-iscsi",
             "cryptsetup-initramfs", "dropbear-initramfs",
-            "grub-efi-amd64",
+            "grub-efi-amd64", "openssh-server",
         )
 
         install_grub(mount_point)

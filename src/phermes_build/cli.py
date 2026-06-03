@@ -77,6 +77,13 @@ def build(
             "--toy-vm", help="DEV: bundle a tiny Linux guest to demo nested virtualization"
         ),
     ] = False,
+    dev_ssh_pubkey: Annotated[
+        str | None,
+        typer.Option(
+            envvar="PHERMES_DEV_SSH_PUBKEY",
+            help="DEV: SSH public key to authorize for root login (with --dev-credentials)",
+        ),
+    ] = None,
 ) -> None:
     validate_disk_path(disk)
     set_verbose(verbose)
@@ -115,7 +122,10 @@ def build(
     ]
     os_steps = [
         ("Installing Proxmox VE", lambda: _install_proxmox(layout)),
-        ("Setting root credentials", lambda: _setup_credentials(dev_credentials)),
+        (
+            "Setting root credentials",
+            lambda: _setup_credentials(dev_credentials, dev_ssh_pubkey),
+        ),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
@@ -183,10 +193,13 @@ def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None)
     raise SystemExit(1)
 
 
-def _setup_credentials(dev_credentials: bool) -> None:
-    """Dev builds get a known temp root password; production locks root entirely."""
+def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None) -> None:
+    """Dev builds get a known temp root password (+ optional SSH key); production
+    locks root entirely."""
     if dev_credentials:
         proxmox.set_root_password(PVE_ROOT_MOUNT, proxmox.TEMP_ROOT_PASSWORD)
+        if dev_ssh_pubkey:
+            proxmox.enable_dev_root_ssh(PVE_ROOT_MOUNT, dev_ssh_pubkey)
     else:
         proxmox.lock_root_account(PVE_ROOT_MOUNT)
 

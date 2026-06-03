@@ -152,6 +152,16 @@ def test_lock_root_account(monkeypatch):
     assert any("root" in c for c in calls)
 
 
+def test_enable_dev_root_ssh(tmp_path):
+    prox_mod.enable_dev_root_ssh(str(tmp_path), "ssh-ed25519 AAAAtest phermes-dev")
+    auth = tmp_path / "root" / ".ssh" / "authorized_keys"
+    assert auth.read_text().strip() == "ssh-ed25519 AAAAtest phermes-dev"
+    assert oct(auth.stat().st_mode)[-3:] == "600"
+    assert oct((tmp_path / "root" / ".ssh").stat().st_mode)[-3:] == "700"
+    dropin = tmp_path / "etc" / "ssh" / "sshd_config.d" / "phermes-dev.conf"
+    assert "PermitRootLogin yes" in dropin.read_text()
+
+
 def test_etc_hosts_content_resolves_hostname():
     content = prox_mod.etc_hosts_content("phermes")
     assert "127.0.0.1 localhost" in content

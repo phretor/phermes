@@ -109,13 +109,17 @@ _smoke-build native extra:
     set -euo pipefail
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
+    # Dev SSH key so root login works on the booted host (just smoke-ssh).
+    mkdir -p .dev-ssh
+    [ -f .dev-ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -C phermes-dev -f .dev-ssh/id_ed25519 >/dev/null
+    PUBKEY=$(cat .dev-ssh/id_ed25519.pub)
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
+        sudo PHERMES_DEV_SSH_PUBKEY="$PUBKEY" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
     else
         # Bind-mount live src so the container always runs current code (the
         # image only provides the toolchain + deps); run 'just docker-build'
         # after changing dependencies.
-        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" -e PHERMES_DEV_SSH_PUBKEY="$PUBKEY" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk
@@ -150,6 +154,12 @@ smoke-verify:
 # Boot the smoke image in QEMU under OVMF (UEFI, KVM when available). Docker by default; native=1 host, serial=1 console
 smoke-qemu native="0" serial="0":
     bash scripts/smoke-qemu.sh {{_smoke_image}} "{{native}}" "{{serial}}"
+
+# SSH into the booted host as root (dev key); pass a command to run it: just smoke-ssh "qm list"
+smoke-ssh command="":
+    ssh -p 2200 -i .dev-ssh/id_ed25519 \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        root@localhost {{command}}
 
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:

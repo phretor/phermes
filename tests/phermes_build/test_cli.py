@@ -140,10 +140,12 @@ def test_setup_credentials_dev_sets_password_prod_locks(monkeypatch):
     calls: list = []
     monkeypatch.setattr(cli_mod.proxmox, "set_root_password", lambda *a: calls.append("set"))
     monkeypatch.setattr(cli_mod.proxmox, "lock_root_account", lambda *a: calls.append("lock"))
+    monkeypatch.setattr(cli_mod.proxmox, "enable_dev_root_ssh", lambda *a: calls.append("ssh"))
 
-    cli_mod._setup_credentials(True)
-    cli_mod._setup_credentials(False)
-    assert calls == ["set", "lock"]
+    cli_mod._setup_credentials(True)  # dev, no key
+    cli_mod._setup_credentials(True, "ssh-ed25519 AAAA")  # dev + key
+    cli_mod._setup_credentials(False)  # production
+    assert calls == ["set", "set", "ssh", "lock"]
 
 
 def _fake_layout():
