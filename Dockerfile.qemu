@@ -1,0 +1,12 @@
+# Lean image for booting a built PHermes disk in QEMU under OVMF (UEFI).
+# Kept separate from the phermes-build image so the builder stays minimal.
+#
+# Only the toolchain lives here. The boot logic (qemu-boot.sh) is bind-mounted
+# at runtime so it always matches the working tree — editing the script never
+# requires rebuilding this image.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qemu-system-x86 \
+    ovmf \
+    && rm -rf /var/lib/apt/lists/*

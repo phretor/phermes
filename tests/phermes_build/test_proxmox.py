@@ -86,6 +86,8 @@ def test_grub_defaults_content():
     content = prox_mod.grub_defaults_content()
     assert "GRUB_ENABLE_CRYPTODISK=y" in content
     assert "GRUB_DISABLE_OS_PROBER=true" in content
+    assert "console=ttyS0,115200" in content
+    assert 'GRUB_TERMINAL="console serial"' in content
 
 
 def test_install_grub_uses_no_nvram(monkeypatch):
@@ -125,6 +127,108 @@ def test_chroot_apt_install_sets_debian_frontend(monkeypatch):
     calls = _capture(monkeypatch)
     prox_mod.chroot_apt_install("/mnt/pve-root", "proxmox-ve")
     assert any("DEBIAN_FRONTEND=noninteractive" in str(c) for c in calls)
+
+
+def test_set_root_password(monkeypatch):
+    received = {}
+
+    def fake_run(cmd, *, input=None, check=True):  # noqa: A002
+        received["cmd"] = cmd
+        received["input"] = input
+        return ""
+
+    monkeypatch.setattr(prox_mod, "run_cmd", fake_run)
+    prox_mod.set_root_password("/mnt/pve-root", "secret123")
+    assert "chpasswd" in received["cmd"]
+    assert "chroot" in received["cmd"]
+    assert received["input"] == "root:secret123\n"
+
+
+def test_lock_root_account(monkeypatch):
+    calls = _capture(monkeypatch)
+    prox_mod.lock_root_account("/mnt/pve-root")
+    assert any("passwd" in c for c in calls)
+    assert any("--lock" in c for c in calls)
+    assert any("root" in c for c in calls)
+
+
+def test_enable_dev_root_ssh(tmp_path):
+    prox_mod.enable_dev_root_ssh(str(tmp_path), "ssh-ed25519 AAAAtest phermes-dev")
+    auth = tmp_path / "root" / ".ssh" / "authorized_keys"
+    assert auth.read_text().strip() == "ssh-ed25519 AAAAtest phermes-dev"
+    assert oct(auth.stat().st_mode)[-3:] == "600"
+    assert oct((tmp_path / "root" / ".ssh").stat().st_mode)[-3:] == "700"
+    dropin = tmp_path / "etc" / "ssh" / "sshd_config.d" / "phermes-dev.conf"
+    assert "PermitRootLogin yes" in dropin.read_text()
+
+
+def test_etc_hosts_content_resolves_hostname():
+    content = prox_mod.etc_hosts_content("phermes")
+    assert "127.0.0.1 localhost" in content
+    assert "phermes" in content
+
+
+def test_write_host_identity(tmp_path):
+    import os
+
+    os.makedirs(tmp_path / "etc")
+    prox_mod.write_host_identity(str(tmp_path), "phermes")
+    assert (tmp_path / "etc" / "hostname").read_text().strip() == "phermes"
+    assert "phermes" in (tmp_path / "etc" / "hosts").read_text()
+
+
+def test_network_interfaces_content_static():
+    content = prox_mod.network_interfaces_content("eth0")
+    assert "iface lo inet loopback" in content
+    assert "auto eth0" in content
+    assert "iface eth0 inet static" in content
+    assert prox_mod.SMOKE_CIDR in content
+    assert prox_mod.SMOKE_GATEWAY in content
+
+
+def test_network_interfaces_has_nat_bridge_for_guests():
+    content = prox_mod.network_interfaces_content("eth0")
+    assert "auto vmbr0" in content
+    assert prox_mod.VMBR0_CIDR in content
+    assert "ip_forward=1" in content
+    assert "MASQUERADE" in content
+
+
+def test_write_network_interfaces(tmp_path):
+    prox_mod.write_network_interfaces(str(tmp_path))
+    text = (tmp_path / "etc" / "network" / "interfaces").read_text()
+    assert "iface eth0 inet static" in text
+    assert prox_mod.SMOKE_ADDRESS in text
+
+
+def test_pve_init_script_creates_node_dir_and_storage():
+    s = prox_mod.pve_init_script()
+    assert "/etc/pve/nodes/$node/qemu-server" in s
+    assert "lvmthin: local-lvm" in s
+    assert "thinpool data" in s
+    assert "content rootdir,images" in s
+
+
+def test_install_pve_firstboot_init(tmp_path):
+    prox_mod.install_pve_firstboot_init(str(tmp_path))
+    script = tmp_path / "usr/local/sbin/phermes-pve-init.sh"
+    assert script.exists()
+    assert oct(script.stat().st_mode)[-3:] == "755"
+    svc = tmp_path / "etc/systemd/system/phermes-pve-init.service"
+    assert "After=pve-cluster.service" in svc.read_text()
+    link = tmp_path / "etc/systemd/system/multi-user.target.wants/phermes-pve-init.service"
+    assert link.is_symlink()
+
+
+def test_etc_hosts_maps_hostname_to_nonloopback():
+    content = prox_mod.etc_hosts_content("phermes")
+    # pmxcfs requires the node name on a non-loopback address
+    assert f"{prox_mod.SMOKE_ADDRESS} phermes.local phermes" in content
+    assert "127.0.1.1" not in content
+
+
+def test_grub_forces_predictable_nic_name():
+    assert "net.ifnames=0" in prox_mod.grub_defaults_content()
 
 
 def test_bind_chroot_mounts_all_dirs(monkeypatch, tmp_path):

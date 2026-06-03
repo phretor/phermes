@@ -70,6 +70,11 @@ PHermes is designed for users who treat their AI environment as infrastructure w
 - **No binaries distributed.** `phermes-build` fetches Proxmox from official community
   repos at build time. The tool itself is signed and checksummed. Nothing is bundled or
   pre-compiled by PHermes.
+- **No shipped credentials.** A production build locks the root account (no console
+  login) and refuses to use a hardcoded LUKS key — the passphrase is operator-supplied at
+  build time. Proxmox admin happens only through the restricted PHermes UI / RBAC, never a
+  default password. Known test credentials exist solely behind an explicit
+  `--dev-credentials` flag and can never appear in a normal build.
 - **No mandatory cloud.** LLM API calls are the only optional outbound traffic. Everything
   else runs entirely offline. Local model backends (llama.cpp, vLLM, Ollama) are supported.
 - **Snapshot-before-change.** Every VM switch and every update triggers an automatic
@@ -97,9 +102,34 @@ PHermes is not a fixed appliance. It adapts to how you work.
 
 ## Status
 
-Early development. Building in public — starting from the design spec.
+Building in public. **Phase 1 (the `phermes-build` CLI) is proven end-to-end** — the
+boot chain works on emulated hardware, all the way up to a guest running an AI agent:
+
+```
+your machine
+└─ QEMU (KVM, nested)
+   └─ PHermes — LUKS2-encrypted SSD → GRUB → Proxmox VE host   ← built by phermes-build
+      └─ Debian node VM (nested KVM, cloud-init)
+         └─ Hermes Agent
+            ● What hostname are you running into?
+              → I'm running on hostname: phermes-node
+            ● What OS flavor is it?
+              → Debian GNU/Linux 12 (bookworm)
+            ● Are you on real hardware?
+              → No — a KVM virtual machine (vendor: QEMU)
+```
+
+What works today: SSD partitioning, LUKS2 full-disk encryption, LVM-thin + Btrfs, a
+Proxmox VE host installed from upstream and booting under UEFI, encrypted-root unlock,
+and a nested Linux guest (Debian, glibc) that runs the Hermes runtime — exercised by a
+loop-device + QEMU smoke harness (`just smoke-*`) with serial console and dev SSH.
+
+Not yet built: the first-boot wizard, the PHermes web UI, VM-flavor switching, and the
+macOS/Windows guests (Phases 2–4). Credentials and networking in the build are provisional
+dev defaults the wizard will own — production builds ship **no** known passwords/keys.
 
 Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superpowers/specs/2026-05-31-phermes-design.md)
+Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs/superpowers/plans/2026-05-31-phase1-phermes-build.md)
 
 ## Hardware requirements
 
@@ -187,9 +217,45 @@ just smoke-run        # disk setup only (partition/LUKS/LVM/Btrfs), ~seconds
 just smoke-full       # full build including Proxmox install
 just smoke-inspect    # lsblk + LVM + Btrfs state
 just smoke-verify     # mount every partition and assert expected content
+just smoke-qemu       # boot the image in QEMU under OVMF (UEFI, no KVM needed)
 just smoke-shell      # interactive shell in the build container
 just smoke-clean      # tear down and delete the image
 ```
+
+### Running a Linux node guest (nested)
+
+`just smoke-full-node` bundles a Debian cloud image into the build (dev only — production
+never ships an OS image). After booting the PHermes host, `phermes-node` has Proxmox start
+it as a nested KVM guest, configured via cloud-init (a `dev` user with your `.dev-ssh` key,
+a static IP on an internal NAT bridge). Then:
+
+```bash
+just smoke-node          # boot the node, attach its serial console
+just smoke-node-ssh      # SSH in as dev@10.10.10.2 (jumps through the PHermes host)
+```
+
+glibc (Debian, not Alpine/musl) so the Python/ML wheel ecosystem works — i.e. it can
+actually run the Hermes runtime. Requires host nested virt (`kvm_intel`/`kvm_amd
+nested=1`), which `smoke-qemu` exposes via `-cpu host`.
+
+`smoke-qemu` boots the built disk in QEMU through a small dedicated container
+(`Dockerfile.qemu`) so no host QEMU/OVMF install is needed — it serves the display over
+VNC on `localhost:5900`. Pass `native=1` to run QEMU directly on the host instead (opens
+a graphical window when `$DISPLAY` is set), or `serial=1` to stream the boot to your
+terminal (`just smoke-qemu serial=1`) — the guest is built with a serial console, so you
+see the full boot log and can type the LUKS passphrase there. Exit serial mode with
+`Ctrl-A X`.
+
+It uses **KVM acceleration when `/dev/kvm` is available** and falls back to TCG emulation
+automatically when it isn't — so KVM is never required, just used when present. If the
+host has nested virtualization enabled (`kvm_intel`/`kvm_amd nested=1`) and `-cpu host`
+exposes `vmx`/`svm`, the inner Proxmox VMs can accelerate too; otherwise only the PHermes
+host itself is accelerated.
+
+Unlike the build, `smoke-qemu` needs **no root**: QEMU runs as your user (native) or
+unprivileged in the container (Docker), reading the image read-only via `-snapshot`. The
+only privileged dependency is Docker-daemon access in Docker mode — and it skips `sudo`
+when you're in the `docker` group.
 
 `smoke-run` / `smoke-full` use Docker by default; pass `native=1` to run `phermes-build`
 directly. The active loop device is recorded in `.smoke`. Always `smoke-clean` before a

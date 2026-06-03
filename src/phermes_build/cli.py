@@ -5,11 +5,21 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from phermes_build import btrfs, exfat, host_config, luks, lvm, partitioner, proxmox, vm
+from phermes_build import (
+    btrfs,
+    exfat,
+    host_config,
+    luks,
+    lvm,
+    node_vm,
+    partitioner,
+    proxmox,
+    vm,
+)
 from phermes_build.disk import compute_layout
 from phermes_build.firstboot import write_firstboot_flag, write_motd
 from phermes_build.models import AcquisitionMode, BuildConfig, VMConfig, VMFlavor
-from phermes_build.runner import CommandError, run_cmd
+from phermes_build.runner import CommandError, run_cmd, set_verbose
 
 app = typer.Typer(name="phermes-build", help="PHermes SSD appliance builder")
 console = Console()
@@ -45,13 +55,45 @@ def build(
     skip_os_install: Annotated[
         bool, typer.Option(help="Run disk setup only; skip Proxmox install (for testing)")
     ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Stream every command's output live")
+    ] = False,
+    dev_credentials: Annotated[
+        bool,
+        typer.Option(
+            help="INSECURE: bake known temp credentials for testing (never for production)"
+        ),
+    ] = False,
+    luks_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            envvar="PHERMES_LUKS_PASSPHRASE",
+            help="LUKS passphrase for a production build (or set PHERMES_LUKS_PASSPHRASE)",
+        ),
+    ] = None,
+    linux_node: Annotated[
+        bool,
+        typer.Option(
+            "--linux-node",
+            help="DEV: bundle a Debian node guest (cloud-init, SSH) to run Hermes / demo nesting",
+        ),
+    ] = False,
+    dev_ssh_pubkey: Annotated[
+        str | None,
+        typer.Option(
+            envvar="PHERMES_DEV_SSH_PUBKEY",
+            help="DEV: SSH public key to authorize for root login (with --dev-credentials)",
+        ),
+    ] = None,
 ) -> None:
     validate_disk_path(disk)
+    set_verbose(verbose)
 
     cfg = BuildConfig(
         disk=disk,
         share_size_gb=share_size,
         share_encrypted=share_encrypted,
+        temp_luks_passphrase=_resolve_luks_passphrase(dev_credentials, luks_passphrase),
     )
 
     if import_vm_macos:
@@ -81,22 +123,23 @@ def build(
     ]
     os_steps = [
         ("Installing Proxmox VE", lambda: _install_proxmox(layout)),
+        (
+            "Setting root credentials",
+            lambda: _setup_credentials(dev_credentials, dev_ssh_pubkey),
+        ),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
         ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
+    if linux_node and not skip_os_install:
+        os_steps.append(("Installing Linux node VM (dev)", lambda: _install_node_vm()))
+
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
-        for description, step_fn in steps:
-            task = progress.add_task(description)
-            try:
-                step_fn()
-            except CommandError as e:
-                progress.stop()
-                console.print(f"[red]✗ {description} failed:[/red] {e}")
-                raise typer.Exit(1) from e
-            progress.update(task, description=f"[green]✓[/green] {description}", completed=True)
+    if verbose:
+        _run_steps_verbose(steps)
+    else:
+        _run_steps_progress(steps)
 
     if skip_os_install:
         console.print("\n[bold yellow]Disk setup complete.[/bold yellow]")
@@ -108,10 +151,68 @@ def build(
         console.print("Connect from any browser: [bold]https://phermes.local[/bold]")
 
 
+def _run_steps_progress(steps) -> None:
+    with Progress(
+        SpinnerColumn(), TextColumn("{task.description}"), console=console
+    ) as progress:
+        for description, step_fn in steps:
+            task = progress.add_task(description)
+            try:
+                step_fn()
+            except CommandError as e:
+                progress.stop()
+                console.print(f"[red]✗ {description} failed:[/red] {e}")
+                raise typer.Exit(1) from e
+            progress.update(
+                task, description=f"[green]✓[/green] {description}", completed=True
+            )
+
+
+def _run_steps_verbose(steps) -> None:
+    """Run steps with plain headers and live command output (no spinner)."""
+    for description, step_fn in steps:
+        console.print(f"[bold cyan]==>[/bold cyan] {description}")
+        try:
+            step_fn()
+        except CommandError as e:
+            console.print(f"[red]✗ {description} failed:[/red] {e}")
+            raise typer.Exit(1) from e
+        console.print(f"[green]✓[/green] {description}")
+
+
+def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None) -> str:
+    """Pick the LUKS passphrase, refusing to ship a known key in production."""
+    if dev_credentials:
+        return TEMP_PASSPHRASE
+    if luks_passphrase:
+        return luks_passphrase
+    console.print(
+        "[red]Error:[/red] a production build needs a LUKS passphrase. Pass "
+        "[bold]--luks-passphrase[/bold] (or set PHERMES_LUKS_PASSPHRASE), or use "
+        "[bold]--dev-credentials[/bold] for testing."
+    )
+    raise SystemExit(1)
+
+
+def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None) -> None:
+    """Dev builds get a known temp root password (+ optional SSH key); production
+    locks root entirely."""
+    if dev_credentials:
+        proxmox.set_root_password(PVE_ROOT_MOUNT, proxmox.TEMP_ROOT_PASSWORD)
+        if dev_ssh_pubkey:
+            proxmox.enable_dev_root_ssh(PVE_ROOT_MOUNT, dev_ssh_pubkey)
+    else:
+        proxmox.lock_root_account(PVE_ROOT_MOUNT)
+
+
+def _install_node_vm() -> None:
+    node_vm.install_node_vm(PVE_ROOT_MOUNT)
+
+
 def _setup_luks(layout, cfg: BuildConfig) -> None:
     luks_part = partitioner.partition_path(layout.disk, 3)
-    luks.format_luks(luks_part, TEMP_PASSPHRASE)
-    luks.open_luks(luks_part, LUKS_NAME, TEMP_PASSPHRASE)
+    luks.format_luks(luks_part, cfg.temp_luks_passphrase)
+    luks.open_luks(luks_part, LUKS_NAME, cfg.temp_luks_passphrase)
 
 
 def _setup_lvm(layout) -> None:

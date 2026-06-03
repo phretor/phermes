@@ -88,21 +88,38 @@ smoke-run native="0":
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0 --skip-os-install
+        sudo phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0 --skip-os-install
+        # Bind-mount live src so the container always runs current code (the
+        # image only provides the toolchain + deps); run 'just docker-build'
+        # after changing dependencies.
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     fi
 
-# Full Proxmox install. Docker by default; override with native=1
-smoke-full native="0":
+# Full Proxmox install (verbose). Docker by default; native=1 runs on the host
+smoke-full native="0": (_smoke-build native "")
+
+# Like smoke-full but also bundles a Debian Linux node guest (run phermes-node after boot)
+smoke-full-node native="0": (_smoke-build native "--linux-node")
+
+# Shared build invocation; `extra` carries extra phermes-build flags (e.g. --toy-vm)
+[private]
+_smoke-build native extra:
     #!/usr/bin/env bash
     set -euo pipefail
     [ -f {{_smoke_state}} ] || { echo "error: no active smoke session. Run 'just smoke-create' first." >&2; exit 1; }
     DISK=$(cat {{_smoke_state}})
+    # Dev SSH key so root login works on the booted host (just smoke-ssh).
+    mkdir -p .dev-ssh
+    [ -f .dev-ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -C phermes-dev -f .dev-ssh/id_ed25519 >/dev/null
+    PUBKEY=$(cat .dev-ssh/id_ed25519.pub)
     if [ "{{native}}" = "1" ]; then
-        sudo phermes-build "$DISK" --share-size 0
+        sudo PHERMES_DEV_SSH_PUBKEY="$PUBKEY" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
     else
-        sudo docker run --rm --privileged -v /dev:/dev phermes-build "$DISK" --share-size 0
+        # Bind-mount live src so the container always runs current code (the
+        # image only provides the toolchain + deps); run 'just docker-build'
+        # after changing dependencies.
+        sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" -e PHERMES_DEV_SSH_PUBKEY="$PUBKEY" phermes-build "$DISK" --share-size 0 --verbose --dev-credentials {{extra}}
     fi
 
 # Show partition table, LVM volumes, and Btrfs filesystems on the smoke disk
@@ -133,6 +150,42 @@ smoke-verify:
     sudo docker run --rm --privileged -v /dev:/dev \
         -v "$PWD/scripts/smoke-verify.sh:/verify.sh:ro" \
         --entrypoint /bin/bash phermes-build /verify.sh "$DISK"
+
+# Boot the smoke image in QEMU under OVMF (UEFI, KVM when available). Docker by default; native=1 host, serial=1 console
+smoke-qemu native="0" serial="0":
+    bash scripts/smoke-qemu.sh {{_smoke_image}} "{{native}}" "{{serial}}"
+
+# SSH into the booted host as root (dev key); pass a command to run it: just smoke-ssh "qm list"
+smoke-ssh command="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(-p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+    if [ -n "{{command}}" ]; then
+        ssh "${args[@]}" root@localhost "{{command}}"
+    else
+        ssh "${args[@]}" root@localhost
+    fi
+
+# Boot the Linux node VM and attach to its serial console (exit qm terminal with Ctrl-O)
+smoke-node:
+    ssh -t -p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        root@localhost "phermes-node"
+
+# SSH into the Linux node VM (dev@10.10.10.2) via the PHermes host as a jump
+smoke-node-ssh command="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base=(-i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+    jump="ssh ${base[*]} -W %h:%p -p 2200 root@localhost"
+    args=("${base[@]}" -o ProxyCommand="$jump")
+    if [ -n "{{command}}" ]; then
+        ssh "${args[@]}" dev@10.10.10.2 "{{command}}"
+    else
+        ssh "${args[@]}" dev@10.10.10.2
+    fi
 
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:
