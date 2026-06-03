@@ -3,6 +3,8 @@
 **Personal Hermes** — a fully encrypted, self-hosted, portable AI orchestration appliance.
 Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](https://github.com/NousResearch/hermes-agent) environment is ready. Still want to host it in the cloud? Import the disk volume into your favorite cloud provider's stack.
 
+![PHermes booting end-to-end to a Hermes Agent on a nested Linux node](img/demo.gif)
+
 ---
 
 ### After boot
@@ -278,6 +280,15 @@ doubles as a CI-style gate.
 
 ## License
 
-PHermes own code: Apache-2.0.
-Proxmox VE (fetched from official repos at build time): AGPL-3.0.
-Hermes Agent: MIT.
+PHermes's own code is licensed under the **GNU Affero General Public License v3.0**
+(see [`LICENSE`](LICENSE)). Copyright © 2026 Federico Maggi.
+
+**Commercial licensing.** As the copyright holder, the author can grant commercial licenses
+for use without AGPL obligations — e.g. embedding PHermes in a proprietary hardware
+appliance or hosted offering. Contact <fede@maggi.cc>.
+
+Components fetched or used at build/run time keep their own licenses:
+
+- Proxmox VE (fetched from official repos at build time): AGPL-3.0
+- Hermes Agent: MIT
+- Debian, the Linux kernel, and other packages: their respective licenses
