@@ -102,9 +102,34 @@ PHermes is not a fixed appliance. It adapts to how you work.
 
 ## Status
 
-Early development. Building in public — starting from the design spec.
+Building in public. **Phase 1 (the `phermes-build` CLI) is proven end-to-end** — the
+boot chain works on emulated hardware, all the way up to a guest running an AI agent:
+
+```
+your machine
+└─ QEMU (KVM, nested)
+   └─ PHermes — LUKS2-encrypted SSD → GRUB → Proxmox VE host   ← built by phermes-build
+      └─ Debian node VM (nested KVM, cloud-init)
+         └─ Hermes Agent
+            ● What hostname are you running into?
+              → I'm running on hostname: phermes-node
+            ● What OS flavor is it?
+              → Debian GNU/Linux 12 (bookworm)
+            ● Are you on real hardware?
+              → No — a KVM virtual machine (vendor: QEMU)
+```
+
+What works today: SSD partitioning, LUKS2 full-disk encryption, LVM-thin + Btrfs, a
+Proxmox VE host installed from upstream and booting under UEFI, encrypted-root unlock,
+and a nested Linux guest (Debian, glibc) that runs the Hermes runtime — exercised by a
+loop-device + QEMU smoke harness (`just smoke-*`) with serial console and dev SSH.
+
+Not yet built: the first-boot wizard, the PHermes web UI, VM-flavor switching, and the
+macOS/Windows guests (Phases 2–4). Credentials and networking in the build are provisional
+dev defaults the wizard will own — production builds ship **no** known passwords/keys.
 
 Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superpowers/specs/2026-05-31-phermes-design.md)
+Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs/superpowers/plans/2026-05-31-phase1-phermes-build.md)
 
 ## Hardware requirements
 
