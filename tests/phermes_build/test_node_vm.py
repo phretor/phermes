@@ -12,6 +12,13 @@ def test_helper_script_uses_cloudinit_and_vmbr0():
     assert str(node_mod.NODE_VMID) in s
 
 
+def test_helper_script_installs_uv_via_vendor_data():
+    s = node_mod.node_helper_script()
+    assert "astral.sh/uv/install.sh" in s  # uv installed so Hermes can run
+    assert "vendor=local:snippets/phermes-node-vendor.yaml" in s
+    assert "package_update" in s
+
+
 def test_install_node_vm_downloads_and_writes_helper(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(node_mod, "run_cmd", lambda cmd, **kw: calls.append(cmd) or "")

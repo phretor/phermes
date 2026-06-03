@@ -207,6 +207,8 @@ def test_pve_init_script_creates_node_dir_and_storage():
     assert "lvmthin: local-lvm" in s
     assert "thinpool data" in s
     assert "content rootdir,images" in s
+    # snippets enabled on local so cloud-init vendor-data can be referenced
+    assert "snippets" in s
 
 
 def test_install_pve_firstboot_init(tmp_path):

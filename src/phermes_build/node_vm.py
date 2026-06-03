@@ -22,8 +22,8 @@ NODE_PASSWORD = "phermes-change-me"
 
 def node_helper_script() -> str:
     """Runtime helper (on the booted Proxmox host): create and boot the Linux
-    node as a guest, configured via Proxmox cloud-init (dev user + the host's
-    authorized SSH key, static IP on vmbr0), then report how to reach it."""
+    node as a guest. User/SSH/IP come from Proxmox cloud-init; a vendor-data
+    snippet installs uv on first boot so the node can run the Hermes runtime."""
     return f"""#!/bin/sh
 set -e
 VMID={NODE_VMID}
@@ -33,6 +33,17 @@ IMG={NODE_IMAGE_PATH}
 
 storage=$(pvesm status -content images 2>/dev/null | awk 'NR==2 {{print $1}}')
 storage=${{storage:-local-lvm}}
+
+# cloud-init vendor-data: install uv system-wide so the node can run Hermes.
+mkdir -p /var/lib/vz/snippets
+cat > /var/lib/vz/snippets/phermes-node-vendor.yaml <<'EOF'
+#cloud-config
+package_update: true
+packages:
+  - curl
+runcmd:
+  - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+EOF
 
 if ! qm status "$VMID" >/dev/null 2>&1; then
     qm create "$VMID" --name phermes-node --memory 2048 --cores 2 --cpu host \\
@@ -47,10 +58,12 @@ if ! qm status "$VMID" >/dev/null 2>&1; then
     qm set "$VMID" --ciuser {NODE_USER} --cipassword {NODE_PASSWORD}
     qm set "$VMID" --sshkeys /root/.ssh/authorized_keys
     qm set "$VMID" --ipconfig0 ip={NODE_IP}/24,gw={NODE_GATEWAY}
+    qm set "$VMID" --nameserver 1.1.1.1
+    qm set "$VMID" --cicustom "vendor=local:snippets/phermes-node-vendor.yaml"
 fi
 
 qm start "$VMID" 2>/dev/null || true
-echo "phermes-node ({NODE_IP}) starting (user: {NODE_USER})."
+echo "phermes-node ({NODE_IP}) starting (user: {NODE_USER}); uv installs on first boot."
 echo "  console: qm terminal $VMID            # Ctrl-O to exit"
 echo "  ssh:     ssh {NODE_USER}@{NODE_IP}    # from this host"
 """
