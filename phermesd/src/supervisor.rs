@@ -60,6 +60,7 @@ pub trait Launcher: Send + Sync {
 
 struct Active {
     id: String,
+    flavor: crate::config::Flavor,
     pid: i32,
     state: VmState,
     qmp: Box<dyn QmpControl>,
@@ -143,7 +144,7 @@ impl Supervisor {
         let state = State {
             active: self.active.as_ref().map(|a| VmRuntime {
                 id: a.id.clone(),
-                flavor: self.find(&a.id).map_or(crate::config::Flavor::Linux, |v| v.def.flavor),
+                flavor: a.flavor,
                 pid: a.pid,
                 qmp: a.rt.qmp.clone(),
                 serial: Some(a.rt.serial.clone()),
@@ -172,9 +173,23 @@ impl Supervisor {
         let rt = self.runtime_paths(id);
         let argv = build_argv(&vm, &rt)?;
         let spawned = self.launcher.launch(&vm, &argv, &rt).await?;
-        let running = spawned.qmp.is_running().await?;
+        let running = match spawned.qmp.is_running().await {
+            Ok(r) => r,
+            Err(e) => {
+                self.launcher.force_kill(spawned.pid);
+                self.launcher.cleanup(&rt);
+                return Err(SupervisorError::Qmp(e));
+            }
+        };
         let state = if running { VmState::Running } else { VmState::Starting };
-        self.active = Some(Active { id: id.to_string(), pid: spawned.pid, state, qmp: spawned.qmp, rt });
+        self.active = Some(Active {
+            id: id.to_string(),
+            flavor: vm.def.flavor,
+            pid: spawned.pid,
+            state,
+            qmp: spawned.qmp,
+            rt,
+        });
         self.persist()?;
         let vm = self.find(id)?;
         Ok(self.info_for(vm))
@@ -236,6 +251,7 @@ impl Supervisor {
                 Ok(qmp) => {
                     self.active = Some(Active {
                         id: rec.id,
+                        flavor: rec.flavor,
                         pid: rec.pid,
                         state: VmState::Running,
                         qmp,

@@ -164,6 +164,63 @@ async fn activate_unknown_id_errors() {
     assert!(matches!(sup.activate("nope").await, Err(SupervisorError::UnknownId(_))));
 }
 
+struct FailingQmp;
+#[async_trait]
+impl QmpControl for FailingQmp {
+    async fn is_running(&self) -> Result<bool, QmpError> {
+        Err(QmpError::Protocol("handshake failed".into()))
+    }
+    async fn powerdown(&self) -> Result<(), QmpError> {
+        Ok(())
+    }
+    async fn wait_shutdown(&mut self) -> Result<(), QmpError> {
+        Ok(())
+    }
+}
+
+struct FailingLauncher {
+    killed: Arc<AtomicI32>,
+    cleaned: Arc<AtomicI32>,
+}
+
+#[async_trait]
+impl Launcher for FailingLauncher {
+    async fn launch(&self, _vm: &Vm, _argv: &[String], _rt: &RuntimePaths) -> Result<Spawned, SupervisorError> {
+        Ok(Spawned { pid: 2222, qmp: Box::new(FailingQmp) })
+    }
+    async fn reconnect(&self, _rt: &RuntimePaths) -> Result<Box<dyn QmpControl>, SupervisorError> {
+        Ok(Box::new(FailingQmp))
+    }
+    fn force_kill(&self, _pid: i32) {
+        self.killed.fetch_add(1, Ordering::SeqCst);
+    }
+    fn cleanup(&self, _rt: &RuntimePaths) {
+        self.cleaned.fetch_add(1, Ordering::SeqCst);
+    }
+    fn is_alive(&self, _pid: i32) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn activate_with_failed_qmp_confirmation_kills_and_cleans() {
+    let dir = tempfile::tempdir().unwrap();
+    let killed = Arc::new(AtomicI32::new(0));
+    let cleaned = Arc::new(AtomicI32::new(0));
+    let mut sup = Supervisor::new(
+        vec![vm("linux")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(FailingLauncher { killed: killed.clone(), cleaned: cleaned.clone() }),
+    );
+    let res = sup.activate("linux").await;
+    assert!(matches!(res, Err(SupervisorError::Qmp(_))));
+    assert_eq!(killed.load(Ordering::SeqCst), 1);
+    assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+    assert!(matches!(sup.status(None), Err(SupervisorError::NoActive)));
+}
+
 #[tokio::test]
 async fn list_shows_defined_for_inactive_vms() {
     let (launcher, _k, _c) = MockLauncher::new(true);
