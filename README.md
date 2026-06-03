@@ -147,6 +147,10 @@ dev defaults the wizard will own — production builds ship **no** known passwor
 Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superpowers/specs/2026-05-31-phermes-design.md)
 Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs/superpowers/plans/2026-05-31-phase1-phermes-build.md)
 
+### phermesd (in development)
+
+`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md); plan: [`docs/superpowers/plans/2026-06-03-phermesd-slice1.md`](docs/superpowers/plans/2026-06-03-phermesd-slice1.md).
+
 ## Hardware requirements
 
 **Target machine** (where PHermes runs):

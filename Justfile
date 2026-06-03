@@ -212,3 +212,22 @@ smoke-clean:
     [ -n "$DISK" ] && sudo losetup -d "$DISK" 2>/dev/null || true
     rm -f {{_smoke_image}} {{_smoke_state}}
     echo "Done."
+
+# ── phermesd (Rust orchestrator) ─────────────────────────────────────────────
+
+# Build the Rust orchestrator
+phermesd-build:
+    cd phermesd && cargo build
+
+# Lint the orchestrator (clippy, deny warnings)
+phermesd-check:
+    cd phermesd && cargo clippy --all-targets --all-features -- -D warnings
+
+# Unit + integration tests (no QEMU)
+phermesd-test:
+    cd phermesd && cargo test
+
+# Gated end-to-end boot (needs /dev/kvm, OVMF, a disk + bridge)
+phermesd-e2e disk bridge="vmbr0":
+    cd phermesd && PHERMESD_E2E_DISK={{disk}} PHERMESD_E2E_BRIDGE={{bridge}} \
+        cargo test --test e2e_boot -- --ignored --nocapture
