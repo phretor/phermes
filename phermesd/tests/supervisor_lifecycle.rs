@@ -230,3 +230,83 @@ async fn list_shows_defined_for_inactive_vms() {
     assert_eq!(all.len(), 2);
     assert!(all.iter().all(|i| i.state == VmState::Defined));
 }
+
+/// A launcher whose `is_alive` is configurable, to simulate live vs. dead re-adopt.
+struct AdoptLauncher {
+    alive: bool,
+    cleaned: Arc<AtomicI32>,
+}
+
+#[async_trait]
+impl Launcher for AdoptLauncher {
+    async fn launch(&self, _vm: &Vm, _argv: &[String], _rt: &RuntimePaths) -> Result<Spawned, SupervisorError> {
+        Ok(Spawned {
+            pid: 1234,
+            qmp: Box::new(MockQmp { shutdown_on_powerdown: true, powered_down: Arc::new(AtomicBool::new(false)) }),
+        })
+    }
+    async fn reconnect(&self, _rt: &RuntimePaths) -> Result<Box<dyn QmpControl>, SupervisorError> {
+        Ok(Box::new(MockQmp { shutdown_on_powerdown: true, powered_down: Arc::new(AtomicBool::new(false)) }))
+    }
+    fn force_kill(&self, _pid: i32) {}
+    fn cleanup(&self, _rt: &RuntimePaths) {
+        self.cleaned.fetch_add(1, Ordering::SeqCst);
+    }
+    fn is_alive(&self, _pid: i32) -> bool {
+        self.alive
+    }
+}
+
+fn seed_state(dir: &std::path::Path) -> std::io::Result<()> {
+    let rt = phermesd::state::VmRuntime {
+        id: "linux".to_string(),
+        flavor: Flavor::Linux,
+        pid: 1234,
+        qmp: dir.join("run/linux/qmp.sock"),
+        serial: Some(dir.join("run/linux/serial.sock")),
+        vnc: Some(dir.join("run/linux/vnc.sock")),
+        started_at: 1,
+    };
+    let state = phermesd::state::State { active: Some(rt) };
+    state.save(&dir.join("state.json")).map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+#[tokio::test]
+async fn readopt_resumes_a_live_vm_without_relaunch() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("run/linux")).unwrap();
+    seed_state(dir.path()).unwrap();
+    let cleaned = Arc::new(AtomicI32::new(0));
+    let mut sup = Supervisor::new(
+        vec![vm("linux"), vm("windows")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(AdoptLauncher { alive: true, cleaned: cleaned.clone() }),
+    );
+    sup.readopt().await.unwrap();
+    let st = sup.status(None).unwrap();
+    assert_eq!(st.id, "linux");
+    assert_eq!(st.state, VmState::Running);
+    assert_eq!(cleaned.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn readopt_clears_a_dead_vm_record() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("run/linux")).unwrap();
+    seed_state(dir.path()).unwrap();
+    let cleaned = Arc::new(AtomicI32::new(0));
+    let mut sup = Supervisor::new(
+        vec![vm("linux")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(AdoptLauncher { alive: false, cleaned: cleaned.clone() }),
+    );
+    sup.readopt().await.unwrap();
+    assert!(matches!(sup.status(None), Err(SupervisorError::NoActive)));
+    assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+    let reloaded = phermesd::state::State::load(&dir.path().join("state.json")).unwrap();
+    assert!(reloaded.active.is_none());
+}
