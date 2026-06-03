@@ -1,7 +1,7 @@
 //! VM definition model: typed TOML at /etc/phermes/vms/<id>.toml.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,13 +75,12 @@ pub struct VmDef {
     pub flavor: Flavor,
     pub resources: Resources,
     pub firmware: Firmware,
+    #[serde(default)]
     pub disk: Vec<Disk>,
     pub net: Vec<Net>,
     #[serde(default)]
     pub console: Console,
 }
-
-use std::path::Path;
 
 /// A definition plus its id (the file stem).
 #[derive(Debug, Clone)]
@@ -257,15 +256,44 @@ vnc = true
         assert_eq!(vm.def.flavor, Flavor::Linux);
     }
 
+    fn write_and_load(toml: &str) -> Result<Vm, ConfigError> {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.toml");
+        std::fs::write(&p, toml).unwrap();
+        load_file(&p)
+    }
+
     #[test]
-    fn validate_rejects_zero_resources_and_empty_disk() {
+    fn validate_rejects_zero_memory() {
         let bad = "flavor=\"linux\"\n[resources]\nmemory_mib=0\nvcpus=1\n\
                    [firmware]\novmf_code=\"/a\"\novmf_vars_template=\"/b\"\n\
                    [[disk]]\npath=\"/c\"\nformat=\"raw\"\n[[net]]\nbridge=\"vmbr0\"\n";
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("bad.toml");
-        std::fs::write(&p, bad).unwrap();
-        assert!(matches!(load_file(&p), Err(ConfigError::Invalid { .. })));
+        assert!(matches!(
+            write_and_load(bad),
+            Err(ConfigError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_vcpus() {
+        let bad = "flavor=\"linux\"\n[resources]\nmemory_mib=512\nvcpus=0\n\
+                   [firmware]\novmf_code=\"/a\"\novmf_vars_template=\"/b\"\n\
+                   [[disk]]\npath=\"/c\"\nformat=\"raw\"\n[[net]]\nbridge=\"vmbr0\"\n";
+        assert!(matches!(
+            write_and_load(bad),
+            Err(ConfigError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_empty_disk() {
+        let bad = "flavor=\"linux\"\n[resources]\nmemory_mib=512\nvcpus=1\n\
+                   [firmware]\novmf_code=\"/a\"\novmf_vars_template=\"/b\"\n\
+                   [[net]]\nbridge=\"vmbr0\"\n";
+        assert!(matches!(
+            write_and_load(bad),
+            Err(ConfigError::Invalid { .. })
+        ));
     }
 
     #[test]
