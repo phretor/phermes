@@ -66,7 +66,7 @@ def pve_init_script() -> str:
         "  cat > /etc/pve/storage.cfg <<'EOF'\n"
         "dir: local\n"
         "\tpath /var/lib/vz\n"
-        "\tcontent iso,vztmpl,backup\n"
+        "\tcontent iso,vztmpl,backup,snippets\n"
         "\n"
         "lvmthin: local-lvm\n"
         "\tthinpool data\n"
