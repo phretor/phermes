@@ -45,7 +45,10 @@ async fn handle_conn(stream: UnixStream, sup: Arc<Mutex<Supervisor>>, vms_dir: A
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let resp = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => dispatch(&sup, &vms_dir, req).await,
+            Ok(req) => {
+                tracing::debug!(?req, "dispatch");
+                dispatch(&sup, &vms_dir, req).await
+            }
             Err(e) => Response::err("bad_request", &e.to_string()),
         };
         let Ok(encoded) = encode_line(&resp) else {
@@ -75,7 +78,14 @@ pub async fn serve(
     let listener = UnixListener::bind(socket_path)?;
     let vms_dir = Arc::new(vms_dir);
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = %e, "accept failed; continuing");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let sup = sup.clone();
         let vms_dir = vms_dir.clone();
         tokio::spawn(handle_conn(stream, sup, vms_dir));
