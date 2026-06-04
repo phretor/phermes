@@ -4,7 +4,8 @@
 
 use crate::btrfs::{BtrfsError, BtrfsOps};
 use crate::lvm::{Lv, LvmError, LvmOps};
-use crate::qga::{QgaConnector, QgaError};
+use crate::qga::{QgaConnector, QgaControl, QgaError};
+use chrono::Utc;
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -50,6 +51,13 @@ impl SnapKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub vmid: u32,
+    pub utc: String,
+    pub kind: SnapKind,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("lvm: {0}")]
@@ -81,9 +89,8 @@ pub enum StorageError {
 pub struct Storage {
     cfg: StorageConfig,
     lvm: Box<dyn LvmOps>,
-    // used in S8/S9 (checkpoint/rollback)
-    _btrfs: Box<dyn BtrfsOps>,
-    _qga: Box<dyn QgaConnector>,
+    btrfs: Box<dyn BtrfsOps>,
+    qga: Box<dyn QgaConnector>,
 }
 
 #[must_use]
@@ -109,7 +116,7 @@ impl Storage {
         btrfs: Box<dyn BtrfsOps>,
         qga: Box<dyn QgaConnector>,
     ) -> Self {
-        Self { cfg, lvm, _btrfs: btrfs, _qga: qga }
+        Self { cfg, lvm, btrfs, qga }
     }
 
     /// List the volume group's logical volumes.
@@ -196,6 +203,91 @@ impl Storage {
         }
         self.lvm.remove(&disk_device(&self.cfg.vg, vmid)).await?;
         Ok(())
+    }
+
+    fn utc_stamp() -> String {
+        Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
+    }
+
+    fn overlay_snap_path(&self, kind: SnapKind, utc: &str) -> std::path::PathBuf {
+        self.cfg.snapshots_dir.join(format!("overlay-{}-{utc}", kind.as_str()))
+    }
+
+    fn pool_data_percent(lvs: &[Lv], pool: &str) -> f64 {
+        lvs.iter().find(|l| l.lv_name == pool).and_then(|l| l.data_percent).unwrap_or(0.0)
+    }
+
+    /// Take a checkpoint (VM disk + overlay). If `qga_sock` is Some the VM is active and is
+    /// quiesced best-effort; None means a stopped VM (cold, consistent).
+    ///
+    /// # Errors
+    /// `NotManaged` if the disk isn't ours; `PoolFull` if over threshold (auto only);
+    /// LVM/Btrfs errors. Partial snapshots are rolled back and the guest is always thawed.
+    pub async fn checkpoint(
+        &self,
+        vmid: u32,
+        kind: SnapKind,
+        qga_sock: Option<std::path::PathBuf>,
+    ) -> Result<Checkpoint, StorageError> {
+        let lvs = self.lvm.list(&self.cfg.vg).await?;
+        if managed_disk(&lvs, vmid).is_none() {
+            return Err(StorageError::NotManaged(disk_name(vmid)));
+        }
+        if kind == SnapKind::Auto {
+            let pct = Self::pool_data_percent(&lvs, &self.cfg.pool);
+            if pct > self.cfg.pool_threshold {
+                return Err(StorageError::PoolFull {
+                    pool: self.cfg.pool.clone(),
+                    percent: pct,
+                    threshold: self.cfg.pool_threshold,
+                });
+            }
+        }
+
+        let utc = Self::utc_stamp();
+        let snap_name = format!("{}-snap-{}-{utc}", disk_name(vmid), kind.as_str());
+        let overlay_dst = self.overlay_snap_path(kind, &utc);
+
+        let frozen = self.try_freeze(qga_sock.as_deref()).await;
+
+        let result = async {
+            self.lvm.snapshot(&self.cfg.vg, &disk_name(vmid), &snap_name).await?;
+            if let Err(e) = self.btrfs.snapshot(&self.cfg.overlay, &overlay_dst).await {
+                let _ = self.lvm.remove(&format!("/dev/{}/{snap_name}", self.cfg.vg)).await;
+                return Err(StorageError::from(e));
+            }
+            Ok::<(), StorageError>(())
+        }
+        .await;
+
+        if let Some(qga) = frozen {
+            let _ = qga.thaw().await;
+        }
+        result?;
+
+        if kind == SnapKind::Auto {
+            self.prune_auto(vmid).await?;
+        }
+        Ok(Checkpoint { vmid, utc, kind })
+    }
+
+    /// Connect QGA and freeze; returns the live handle if freeze succeeded (so the caller
+    /// can thaw), or None if no agent / freeze failed (crash-consistent).
+    async fn try_freeze(&self, qga_sock: Option<&std::path::Path>) -> Option<Box<dyn QgaControl>> {
+        let sock = qga_sock?;
+        let qga = self.qga.connect(sock).await.ok()?;
+        if qga.ping().await.is_err() {
+            return None;
+        }
+        match qga.freeze().await {
+            Ok(_) => Some(qga),
+            Err(_) => None,
+        }
+    }
+
+    async fn prune_auto(&self, _vmid: u32) -> Result<(), StorageError> {
+        // retention pruning is implemented in S9; the await keeps this async for S9's signature
+        std::future::ready(Ok(())).await
     }
 }
 

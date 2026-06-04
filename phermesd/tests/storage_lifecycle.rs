@@ -213,3 +213,47 @@ async fn delete_removes_disk_and_its_snapshots() {
         "disk not removed: {recorded:?}"
     );
 }
+
+#[tokio::test]
+async fn checkpoint_quiesces_and_thaws_when_active() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
+    let conn = MockConnector::default();
+    let frozen = conn.frozen.clone();
+    let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(conn));
+    let cp = storage
+        .checkpoint(102, phermesd::storage::SnapKind::Manual, Some("/run/phermesd/x/qga.sock".into()))
+        .await
+        .unwrap();
+    assert_eq!(cp.vmid, 102);
+    // freeze(+1) then thaw(-1) => back to 0
+    assert_eq!(frozen.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn checkpoint_without_agent_is_crash_consistent() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
+    let conn = MockConnector::default();
+    conn.fail.store(true, std::sync::atomic::Ordering::SeqCst); // agent down
+    let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(conn));
+    // Still succeeds (falls back to crash-consistent) even with a qga_sock provided.
+    storage
+        .checkpoint(102, phermesd::storage::SnapKind::Manual, Some("/x/qga.sock".into()))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn auto_checkpoint_refused_when_pool_above_threshold() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(95.0)));
+    let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(MockConnector::default()));
+    assert!(matches!(
+        storage.checkpoint(102, phermesd::storage::SnapKind::Auto, None).await,
+        Err(StorageError::PoolFull { .. })
+    ));
+}
