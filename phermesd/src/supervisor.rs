@@ -74,6 +74,7 @@ pub struct Supervisor {
     stop_timeout: Duration,
     launcher: Box<dyn Launcher>,
     active: Option<Active>,
+    storage: Option<std::sync::Arc<tokio::sync::Mutex<crate::storage::Storage>>>,
 }
 
 impl Supervisor {
@@ -85,7 +86,14 @@ impl Supervisor {
         stop_timeout: Duration,
         launcher: Box<dyn Launcher>,
     ) -> Self {
-        Self { vms, run_root, state_path, stop_timeout, launcher, active: None }
+        Self { vms, run_root, state_path, stop_timeout, launcher, active: None, storage: None }
+    }
+
+    pub fn set_storage(
+        &mut self,
+        storage: std::sync::Arc<tokio::sync::Mutex<crate::storage::Storage>>,
+    ) {
+        self.storage = Some(storage);
     }
 
     fn runtime_paths(&self, id: &str) -> RuntimePaths {
@@ -172,6 +180,19 @@ impl Supervisor {
             if active.id == id {
                 let vm = self.find(id)?;
                 return Ok(self.info_for(vm));
+            }
+            // Safety checkpoint of the outgoing VM before the switch. Best-effort:
+            // a failure (e.g. pool guard) warns and continues — never blocks the switch.
+            let out_vmid = vmid_of(&active.id);
+            let out_qga = active.rt.qga.clone();
+            if let (Some(storage), Some(out_vmid)) = (self.storage.clone(), out_vmid) {
+                let st = storage.lock().await;
+                if let Err(e) =
+                    st.checkpoint(out_vmid, crate::storage::SnapKind::Auto, Some(out_qga)).await
+                {
+                    tracing::warn!(vmid = out_vmid, error = %e,
+                        "auto-checkpoint before switch failed; continuing");
+                }
             }
             self.stop(None).await?;
         }
