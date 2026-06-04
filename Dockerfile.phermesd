@@ -1,0 +1,32 @@
+# Toolchain image for the phermesd Rust orchestrator.
+#
+# Kept separate from the phermes-build image so the builder stays Python-only.
+# All `just phermesd-*` recipes run cargo inside this container — nothing in
+# the phermesd workflow requires Rust, LVM, Btrfs, or QEMU on the host.
+#
+# Bind-mount phermesd/ at /work at runtime so the source always matches the
+# working tree — editing code never requires rebuilding this image. Run
+# `just phermesd-image` after changing this Dockerfile or Cargo.toml deps.
+
+FROM rust:1.95-slim-bookworm
+
+# Runtime tools the gated tests need:
+#   lvm2 + btrfs-progs   -> storage integration (real LVM-thin + Btrfs on loop devices)
+#   qemu-utils           -> qemu-img (Storage::import)
+#   qemu-system-x86 ovmf -> phermesd-e2e (boots a guest under phermesd)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    lvm2 \
+    btrfs-progs \
+    qemu-utils \
+    qemu-system-x86 \
+    ovmf \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# rust:*-slim images ship cargo + rustc but not clippy/rustfmt.
+RUN rustup component add clippy
+
+WORKDIR /work
+# Keep container-built artifacts out of the host's `target/` so a host cargo
+# session (if any) does not collide with a privileged container run.
+ENV CARGO_TARGET_DIR=/work/target-docker

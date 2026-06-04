@@ -214,24 +214,52 @@ smoke-clean:
     echo "Done."
 
 # ── phermesd (Rust orchestrator) ─────────────────────────────────────────────
+#
+# Every recipe runs cargo and the gated tests inside the phermesd-dev container.
+# The host needs only Docker — no Rust, LVM, Btrfs, QEMU, or OVMF on the host.
+# Rebuild the image after editing Dockerfile.phermesd or Cargo.toml.
 
-# Build the Rust orchestrator
+# Build the dedicated phermesd toolchain image.
+phermesd-image:
+    sudo docker build -f Dockerfile.phermesd -t phermesd-dev .
+
+# Build the orchestrator inside the container.
 phermesd-build:
-    cd phermesd && cargo build
+    sudo docker run --rm -v "$PWD/phermesd:/work" phermesd-dev cargo build
 
-# Lint the orchestrator (clippy, deny warnings)
+# Lint the orchestrator (clippy, deny warnings) inside the container.
 phermesd-check:
-    cd phermesd && cargo clippy --all-targets --all-features -- -D warnings
+    sudo docker run --rm -v "$PWD/phermesd:/work" phermesd-dev \
+        cargo clippy --all-targets --all-features -- -D warnings
 
-# Unit + integration tests (no QEMU)
+# Unit + integration tests (no QEMU, no root) inside the container.
 phermesd-test:
-    cd phermesd && cargo test
+    sudo docker run --rm -v "$PWD/phermesd:/work" phermesd-dev cargo test
 
-# Gated end-to-end boot (needs /dev/kvm, OVMF, a disk + bridge)
+# Interactive shell in the phermesd toolchain container.
+phermesd-shell:
+    sudo docker run --rm -it -v "$PWD/phermesd:/work" --entrypoint /bin/bash phermesd-dev
+
+# Gated end-to-end boot under phermesd (boots a guest via KVM in the container).
 phermesd-e2e disk bridge="vmbr0":
-    cd phermesd && PHERMESD_E2E_DISK={{disk}} PHERMESD_E2E_BRIDGE={{bridge}} \
+    sudo docker run --rm --privileged --device /dev/kvm \
+        -v "$PWD/phermesd:/work" \
+        -v "{{disk}}:{{disk}}" \
+        -e PHERMESD_E2E_DISK={{disk}} \
+        -e PHERMESD_E2E_BRIDGE={{bridge}} \
+        phermesd-dev \
         cargo test --test e2e_boot -- --ignored --nocapture
 
-# Storage integration (real LVM-thin + Btrfs on loop devices; needs root)
+# Gated storage integration (real LVM-thin + Btrfs on loop devices, in container).
 phermesd-storage-it:
-    cd phermesd && sudo -E $(command -v cargo) test --test storage_integration -- --ignored --nocapture
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Pre-load kernel targets the container can't modprobe itself.
+    for m in dm-mod dm-thin-pool dm-snapshot loop; do
+        sudo modprobe "$m" 2>/dev/null || true
+    done
+    sudo docker run --rm --privileged \
+        -v "$PWD/phermesd:/work" \
+        -v /lib/modules:/lib/modules:ro \
+        phermesd-dev \
+        cargo test --test storage_integration -- --ignored --nocapture --test-threads=1
