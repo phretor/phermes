@@ -37,15 +37,25 @@ async fn provision_snapshot_rollback_on_loop_devices() {
     let loopdev = losetup_attach(img.to_str().unwrap()).unwrap();
     sh(&["pvcreate", "-y", &loopdev]).unwrap();
     sh(&["vgcreate", "phermes_test", &loopdev]).unwrap();
-    sh(&["lvcreate", "--type", "thin-pool", "-L", "1G", "-n", "data", "phermes_test"]).unwrap();
+    // --config disables udev sync so this runs in udev-less environments (CI/containers),
+    // matching RealLvm's executor.
+    sh(&[
+        "lvcreate", "--config", "activation { udev_sync = 0 udev_rules = 0 }",
+        "--type", "thin-pool", "-L", "1G", "-n", "data", "phermes_test",
+    ])
+    .unwrap();
 
     let bimg = dir.path().join("btrfs.img");
     sh(&["truncate", "-s", "512M", bimg.to_str().unwrap()]).unwrap();
     sh(&["mkfs.btrfs", "-f", bimg.to_str().unwrap()]).unwrap();
-    let overlay = dir.path().join("overlay");
-    std::fs::create_dir_all(&overlay).unwrap();
-    sh(&["mount", "-o", "loop", bimg.to_str().unwrap(), overlay.to_str().unwrap()]).unwrap();
-    let snaps = overlay.join("@snapshots");
+    let mnt = dir.path().join("overlay");
+    std::fs::create_dir_all(&mnt).unwrap();
+    sh(&["mount", "-o", "loop", bimg.to_str().unwrap(), mnt.to_str().unwrap()]).unwrap();
+    // Model production: an @overlay subvolume (rollback deletes+recreates it) plus an
+    // @snapshots dir to hold the read-only overlay snapshots — both under the btrfs root.
+    let overlay = mnt.join("@overlay");
+    sh(&["btrfs", "subvolume", "create", overlay.to_str().unwrap()]).unwrap();
+    let snaps = mnt.join("@snapshots");
     std::fs::create_dir_all(&snaps).unwrap();
 
     let cfg = StorageConfig {
@@ -64,7 +74,7 @@ async fn provision_snapshot_rollback_on_loop_devices() {
     assert!(cps.iter().any(|c| c.utc == cp.utc));
     storage.rollback(102, &cp.utc).await.unwrap();
 
-    let _ = Command::new("umount").arg(overlay.to_str().unwrap()).status();
+    let _ = Command::new("umount").arg(mnt.to_str().unwrap()).status();
     let _ = Command::new("vgremove").args(["-y", "phermes_test"]).status();
     let _ = Command::new("losetup").args(["-d", &loopdev]).status();
 }
