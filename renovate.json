@@ -1,0 +1,48 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Europe/Rome",
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "configMigration": true,
+  "rangeStrategy": "pin",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"],
+    "automerge": true
+  },
+  "packageRules": [
+    {
+      "description": "Automerge Python dev tooling (non-major) after cooldown",
+      "matchManagers": ["pep621"],
+      "matchPackageNames": ["ruff", "ty", "pytest", "pytest-mock"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python dev tooling",
+      "automerge": true
+    },
+    {
+      "description": "Automerge GitHub Actions digest pins and non-major bumps",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pin", "pinDigest", "minor", "patch"],
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "description": "Group Rust dependencies; open PRs for review (no automerge)",
+      "matchManagers": ["cargo"],
+      "groupName": "rust dependencies",
+      "automerge": false
+    },
+    {
+      "description": "Never automerge major version bumps",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
