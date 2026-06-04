@@ -21,13 +21,13 @@ async fn provision_creates_tagged_volume() {
     storage.provision(102, 40, None, false).await.unwrap();
     let lvs = lvs_handle.lock().unwrap();
     let disk = lvs.iter().find(|l| l.lv_name == "vm-102-disk-0").unwrap();
-    assert!(disk.tags.iter().any(|t| t == "@phermesd"));
+    assert!(disk.tags.iter().any(|t| t == "phermesd"));
 }
 
 #[tokio::test]
 async fn provision_existing_without_force_errors() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     let storage = Storage::new(
         cfg(),
         Box::new(lvm),
@@ -43,11 +43,11 @@ async fn provision_existing_without_force_errors() {
 #[tokio::test]
 async fn delete_removes_disk_and_its_snapshots() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs
         .lock()
         .unwrap()
-        .push(lv("vm-102-disk-0-snap-manual-x", &["@phermesd-snap"], "vm-102-disk-0", None));
+        .push(lv("vm-102-disk-0-snap-manual-x", &["phermesd-snap"], "vm-102-disk-0", None));
     let calls = lvm.calls.clone();
     let storage = Storage::new(
         cfg(),
@@ -73,7 +73,7 @@ async fn delete_removes_disk_and_its_snapshots() {
 #[tokio::test]
 async fn checkpoint_quiesces_and_thaws_when_active() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
     let conn = MockConnector::default();
     let frozen = conn.frozen.clone();
@@ -90,7 +90,7 @@ async fn checkpoint_quiesces_and_thaws_when_active() {
 #[tokio::test]
 async fn checkpoint_without_agent_is_crash_consistent() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
     let conn = MockConnector::default();
     conn.fail.store(true, std::sync::atomic::Ordering::SeqCst); // agent down
@@ -105,7 +105,7 @@ async fn checkpoint_without_agent_is_crash_consistent() {
 #[tokio::test]
 async fn auto_checkpoint_refused_when_pool_above_threshold() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(95.0)));
     let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(MockConnector::default()));
     assert!(matches!(
@@ -117,31 +117,31 @@ async fn auto_checkpoint_refused_when_pool_above_threshold() {
 #[tokio::test]
 async fn checkpoint_tags_the_lv_snapshot() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
     let lvs_handle = lvm.lvs.clone();
     let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(MockConnector::default()));
     storage.checkpoint(102, phermesd::storage::SnapKind::Manual, None).await.unwrap();
     let lvs = lvs_handle.lock().unwrap();
     let snap = lvs.iter().find(|l| l.lv_name.starts_with("vm-102-disk-0-snap-manual-")).unwrap();
-    assert!(snap.tags.iter().any(|t| t == "@phermesd-snap"), "snapshot LV must be tagged @phermesd-snap");
+    assert!(snap.tags.iter().any(|t| t == "phermesd-snap"), "snapshot LV must be tagged phermesd-snap");
 }
 
 #[tokio::test]
 async fn auto_prune_keeps_last_n() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(5.0)));
     // two pre-existing auto snaps; cfg() retention=2, so a 3rd prunes the oldest (20260101)
     lvm.lvs.lock().unwrap().push(lv(
         "vm-102-disk-0-snap-auto-20260101T000000Z",
-        &["@phermesd-snap"],
+        &["phermesd-snap"],
         "vm-102-disk-0",
         None,
     ));
     lvm.lvs.lock().unwrap().push(lv(
         "vm-102-disk-0-snap-auto-20260102T000000Z",
-        &["@phermesd-snap"],
+        &["phermesd-snap"],
         "vm-102-disk-0",
         None,
     ));
@@ -161,10 +161,10 @@ async fn auto_prune_keeps_last_n() {
 #[tokio::test]
 async fn rollback_merges_disk_and_restores_overlay() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv(
         "vm-102-disk-0-snap-manual-20260601T000000Z",
-        &["@phermesd-snap"],
+        &["phermesd-snap"],
         "vm-102-disk-0",
         None,
     ));
@@ -192,7 +192,7 @@ async fn rollback_merges_disk_and_restores_overlay() {
 #[tokio::test]
 async fn rollback_unknown_checkpoint_errors() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     let storage = Storage::new(
         cfg(),
         Box::new(lvm),
@@ -208,7 +208,7 @@ async fn rollback_unknown_checkpoint_errors() {
 #[tokio::test]
 async fn checkpoint_rolls_back_lv_snap_and_thaws_when_overlay_fails() {
     let lvm = MockLvm::default();
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
     let lvm_calls = lvm.calls.clone();
     let btrfs = MockBtrfs::default();

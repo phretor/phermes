@@ -9,8 +9,8 @@ use chrono::Utc;
 use std::path::PathBuf;
 use tokio::process::Command;
 
-pub const OWNER_TAG: &str = "@phermesd";
-pub const SNAP_TAG: &str = "@phermesd-snap";
+pub const OWNER_TAG: &str = "phermesd";
+pub const SNAP_TAG: &str = "phermesd-snap";
 
 #[derive(Debug, Clone)]
 pub struct StorageConfig {

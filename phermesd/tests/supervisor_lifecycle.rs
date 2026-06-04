@@ -358,7 +358,7 @@ async fn switch_auto_checkpoints_outgoing_vm() {
     let dir = tempfile::tempdir().unwrap();
     let lvm = MockLvm::default();
     // outgoing linux=vmid 102 must be a managed disk + a pool row for the guard
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
     let lvm_calls = lvm.calls.clone();
     let storage = std::sync::Arc::new(tokio::sync::Mutex::new(phermesd::storage::Storage::new(
@@ -395,7 +395,7 @@ async fn switch_continues_when_auto_checkpoint_fails() {
     let dir = tempfile::tempdir().unwrap();
     let lvm = MockLvm::default();
     // pool at 95% -> auto checkpoint refused (PoolFull); switch must still succeed
-    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
     lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(95.0)));
     let storage = std::sync::Arc::new(tokio::sync::Mutex::new(phermesd::storage::Storage::new(
         cfg(),

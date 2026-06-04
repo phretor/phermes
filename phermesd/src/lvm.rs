@@ -155,13 +155,22 @@ pub trait LvmOps: Send + Sync {
 
 pub struct RealLvm;
 
+/// LVM waits for udev to create device-mapper nodes by default; in udev-less
+/// environments (containers, CI, an immutable host) that wait fails with
+/// "device not cleared / Failed to wipe start of new LV". Disabling udev sync makes
+/// LVM create the nodes itself. Mirrors `phermes-build`'s `lvm.py` workaround.
+const LVM_UDEV_CONFIG: &str = "activation { udev_sync = 0 udev_rules = 0 }";
+
 impl RealLvm {
     async fn run(argv: &[String]) -> Result<String, LvmError> {
         let cmd = argv.join(" ");
         let Some((head, tail)) = argv.split_first() else {
             unreachable!("argv builders always produce non-empty slices")
         };
+        // `--config` is a global LVM option accepted right after the subcommand.
         let output = Command::new(head)
+            .arg("--config")
+            .arg(LVM_UDEV_CONFIG)
             .args(tail)
             .output()
             .await
@@ -216,8 +225,8 @@ mod tests {
     #[test]
     fn addtag_argv_targets_the_device_path() {
         assert_eq!(
-            addtag_argv("/dev/pve/vm-102-disk-0", "@phermesd"),
-            vec!["lvchange", "--addtag", "@phermesd", "/dev/pve/vm-102-disk-0"]
+            addtag_argv("/dev/pve/vm-102-disk-0", "phermesd"),
+            vec!["lvchange", "--addtag", "phermesd", "/dev/pve/vm-102-disk-0"]
         );
     }
 
@@ -261,14 +270,14 @@ mod tests {
     fn parse_lvs_extracts_volumes_tags_and_pool_percent() {
         let json = r#"{"report":[{"lv":[
           {"lv_name":"data","lv_tags":"","pool_lv":"","origin":"","data_percent":"42.50"},
-          {"lv_name":"vm-102-disk-0","lv_tags":"@phermesd","pool_lv":"data","origin":"","data_percent":""},
-          {"lv_name":"vm-102-disk-0-snap-auto-20260603T141500Z","lv_tags":"@phermesd-snap","pool_lv":"data","origin":"vm-102-disk-0","data_percent":""}
+          {"lv_name":"vm-102-disk-0","lv_tags":"phermesd","pool_lv":"data","origin":"","data_percent":""},
+          {"lv_name":"vm-102-disk-0-snap-auto-20260603T141500Z","lv_tags":"phermesd-snap","pool_lv":"data","origin":"vm-102-disk-0","data_percent":""}
         ]}]}"#;
         let lvs = parse_lvs(json).unwrap();
         assert_eq!(lvs.len(), 3);
         let pool = lvs.iter().find(|l| l.lv_name == "data").unwrap();
         assert_eq!(pool.data_percent, Some(42.5));
         let snap = lvs.iter().find(|l| l.origin == "vm-102-disk-0").unwrap();
-        assert!(snap.tags.iter().any(|t| t == "@phermesd-snap"));
+        assert!(snap.tags.iter().any(|t| t == "phermesd-snap"));
     }
 }
