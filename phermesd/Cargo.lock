@@ -478,6 +478,7 @@ dependencies = [
  "futures",
  "log",
  "memchr",
+ "qapi-qga",
  "qapi-qmp",
  "qapi-spec",
  "serde",
@@ -503,6 +504,17 @@ checksum = "7b37f643cfdf67a409a9323334138a11636a5db5d56cedcc780d7a82a7fb7659"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "qapi-qga"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2945a1829999b7e600b98c8326615ece10df20bc9e9ab12ec057a6aa29b7317d"
+dependencies = [
+ "qapi-codegen",
+ "qapi-spec",
+ "serde",
 ]
 
 [[package]]
