@@ -91,12 +91,20 @@ impl LvmOps for MockLvm {
 #[derive(Clone, Default)]
 pub struct MockBtrfs {
     pub calls: Arc<Mutex<Vec<String>>>,
+    pub fail: Arc<AtomicBool>,
 }
 
 #[async_trait]
 impl BtrfsOps for MockBtrfs {
     async fn snapshot(&self, _src: &Path, dst: &Path) -> Result<(), BtrfsError> {
         locked(&self.calls).push(format!("snapshot {}", dst.display()));
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(BtrfsError::Failed {
+                cmd: "btrfs subvolume snapshot".into(),
+                code: 1,
+                stderr: "injected".into(),
+            });
+        }
         Ok(())
     }
 
@@ -334,4 +342,28 @@ async fn rollback_unknown_checkpoint_errors() {
         storage.rollback(102, "nope").await,
         Err(StorageError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn checkpoint_rolls_back_lv_snap_and_thaws_when_overlay_fails() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
+    let lvm_calls = lvm.calls.clone();
+    let btrfs = MockBtrfs::default();
+    btrfs.fail.store(true, Ordering::SeqCst);
+    let conn = MockConnector::default();
+    let frozen = conn.frozen.clone();
+    let storage = Storage::new(cfg(), Box::new(lvm), Box::new(btrfs), Box::new(conn));
+
+    let res = storage
+        .checkpoint(102, phermesd::storage::SnapKind::Manual, Some("/x/qga.sock".into()))
+        .await;
+    assert!(matches!(res, Err(StorageError::Btrfs(_))));
+    // the LV snapshot we created was rolled back
+    let calls = lvm_calls.lock().unwrap();
+    assert!(calls.iter().any(|c| c.starts_with("snap vm-102-disk-0-snap-manual-")));
+    assert!(calls.iter().any(|c| c.starts_with("remove /dev/pve/vm-102-disk-0-snap-manual-")));
+    // guest thawed on the error path
+    assert_eq!(frozen.load(Ordering::SeqCst), 0);
 }
