@@ -113,6 +113,93 @@ pub fn parse_lvs(json: &str) -> Result<Vec<Lv>, serde_json::Error> {
     Ok(out)
 }
 
+use async_trait::async_trait;
+use tokio::process::Command;
+
+#[derive(Debug, thiserror::Error)]
+pub enum LvmError {
+    #[error("running {cmd}: {source}")]
+    Spawn {
+        cmd: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{cmd} failed ({code}): {stderr}")]
+    Failed { cmd: String, code: i32, stderr: String },
+    #[error("parsing lvs output: {0}")]
+    Parse(#[from] serde_json::Error),
+}
+
+/// The LVM side-effect seam. Real impl shells out; tests mock it.
+#[async_trait]
+pub trait LvmOps: Send + Sync {
+    /// # Errors
+    /// Returns `LvmError` if the `lvcreate` command fails to spawn or exits non-zero.
+    async fn create_thin(&self, vg: &str, pool: &str, name: &str, size_gb: u32) -> Result<(), LvmError>;
+    /// # Errors
+    /// Returns `LvmError` if the `lvchange` command fails to spawn or exits non-zero.
+    async fn add_tag(&self, device: &str, tag: &str) -> Result<(), LvmError>;
+    /// # Errors
+    /// Returns `LvmError` if the `lvcreate --snapshot` command fails to spawn or exits non-zero.
+    async fn snapshot(&self, vg: &str, origin: &str, snap_name: &str) -> Result<(), LvmError>;
+    /// # Errors
+    /// Returns `LvmError` if the `lvconvert --merge` command fails to spawn or exits non-zero.
+    async fn merge(&self, vg: &str, snap_name: &str) -> Result<(), LvmError>;
+    /// # Errors
+    /// Returns `LvmError` if the `lvremove` command fails to spawn or exits non-zero.
+    async fn remove(&self, device: &str) -> Result<(), LvmError>;
+    /// # Errors
+    /// Returns `LvmError` if the `lvs` command fails or its JSON output cannot be parsed.
+    async fn list(&self, vg: &str) -> Result<Vec<Lv>, LvmError>;
+}
+
+pub struct RealLvm;
+
+impl RealLvm {
+    async fn run(argv: &[String]) -> Result<String, LvmError> {
+        let cmd = argv.join(" ");
+        let Some((head, tail)) = argv.split_first() else {
+            unreachable!("argv builders always produce non-empty slices")
+        };
+        let output = Command::new(head)
+            .args(tail)
+            .output()
+            .await
+            .map_err(|source| LvmError::Spawn { cmd: cmd.clone(), source })?;
+        if !output.status.success() {
+            return Err(LvmError::Failed {
+                cmd,
+                code: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+}
+
+#[async_trait]
+impl LvmOps for RealLvm {
+    async fn create_thin(&self, vg: &str, pool: &str, name: &str, size_gb: u32) -> Result<(), LvmError> {
+        Self::run(&create_thin_argv(vg, pool, name, size_gb)).await.map(|_| ())
+    }
+    async fn add_tag(&self, device: &str, tag: &str) -> Result<(), LvmError> {
+        Self::run(&addtag_argv(device, tag)).await.map(|_| ())
+    }
+    async fn snapshot(&self, vg: &str, origin: &str, snap_name: &str) -> Result<(), LvmError> {
+        Self::run(&snapshot_argv(vg, origin, snap_name)).await.map(|_| ())
+    }
+    async fn merge(&self, vg: &str, snap_name: &str) -> Result<(), LvmError> {
+        Self::run(&merge_argv(vg, snap_name)).await.map(|_| ())
+    }
+    async fn remove(&self, device: &str) -> Result<(), LvmError> {
+        Self::run(&remove_argv(device)).await.map(|_| ())
+    }
+    async fn list(&self, vg: &str) -> Result<Vec<Lv>, LvmError> {
+        let json = Self::run(&lvs_json_argv(vg)).await?;
+        Ok(parse_lvs(&json)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
