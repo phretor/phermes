@@ -1,13 +1,51 @@
 //! UDS control server: read a JSON request line, dispatch to the supervisor, write a response.
 
 use crate::config::load_dir;
-use crate::proto::{encode_line, Request, Response};
+use crate::proto::{encode_line, CheckpointInfo, Request, Response};
+use crate::storage::{Checkpoint, SnapKind, Storage, StorageError};
 use crate::supervisor::{Supervisor, SupervisorError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
+
+fn default_disk_gb(vmid: u32) -> u32 {
+    match vmid {
+        100 => 120,
+        101 => 100,
+        _ => 40,
+    }
+}
+
+fn to_checkpoint_info(cp: &Checkpoint) -> CheckpointInfo {
+    CheckpointInfo {
+        vmid: cp.vmid,
+        utc: cp.utc.clone(),
+        kind: cp.kind.as_str().to_string(),
+    }
+}
+
+fn storage_error_response(e: &StorageError) -> Response {
+    let kind = match e {
+        StorageError::PoolFull { .. } => "pool_full",
+        StorageError::SourceTooLarge { .. } => "source_too_large",
+        StorageError::NotManaged(_) => "not_managed",
+        StorageError::VmActive(_) => "vm_active",
+        StorageError::NotFound(_) => "not_found",
+        _ => "storage",
+    };
+    Response::err(kind, &e.to_string())
+}
+
+async fn is_active(sup: &Mutex<Supervisor>, vmid: u32) -> bool {
+    sup.lock().await.active_vmid() == Some(vmid)
+}
+
+async fn active_qga_sock(sup: &Mutex<Supervisor>, vmid: u32) -> Option<std::path::PathBuf> {
+    let s = sup.lock().await;
+    if s.active_vmid() == Some(vmid) { s.active_qga_sock() } else { None }
+}
 
 fn error_response(err: &SupervisorError) -> Response {
     let kind = match err {
@@ -22,32 +60,98 @@ fn error_response(err: &SupervisorError) -> Response {
 }
 
 /// Apply a parsed request against the supervisor and produce a response.
-pub async fn dispatch(sup: &Mutex<Supervisor>, vms_dir: &Path, req: Request) -> Response {
-    let mut sup = sup.lock().await;
-    let result: Result<serde_json::Value, SupervisorError> = match req {
-        Request::List => Ok(serde_json::json!(sup.list())),
-        Request::Status { id } => sup.status(id.as_deref()).map(|i| serde_json::json!(i)),
-        Request::Activate { id } => sup.activate(&id).await.map(|i| serde_json::json!(i)),
-        Request::Stop { id } => sup.stop(id.as_deref()).await.map(|i| serde_json::json!(i)),
-        Request::Reload => match load_dir(vms_dir) {
-            Ok(vms) => Ok(serde_json::json!(sup.reload(vms))),
-            Err(e) => return Response::err("config", &e.to_string()),
-        },
-    };
-    match result {
-        Ok(value) => Response::ok(value),
-        Err(e) => error_response(&e),
+pub async fn dispatch(
+    sup: &Mutex<Supervisor>,
+    storage: &Mutex<Storage>,
+    vms_dir: &Path,
+    req: Request,
+) -> Response {
+    match req {
+        Request::List | Request::Status { .. } | Request::Activate { .. } | Request::Stop { .. } | Request::Reload => {
+            let mut s = sup.lock().await;
+            let result: Result<serde_json::Value, SupervisorError> = match req {
+                Request::List => Ok(serde_json::json!(s.list())),
+                Request::Status { id } => s.status(id.as_deref()).map(|i| serde_json::json!(i)),
+                Request::Activate { id } => s.activate(&id).await.map(|i| serde_json::json!(i)),
+                Request::Stop { id } => s.stop(id.as_deref()).await.map(|i| serde_json::json!(i)),
+                Request::Reload => match load_dir(vms_dir) {
+                    Ok(vms) => Ok(serde_json::json!(s.reload(vms))),
+                    Err(e) => return Response::err("config", &e.to_string()),
+                },
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(value) => Response::ok(value),
+                Err(e) => error_response(&e),
+            }
+        }
+        Request::Provision { vmid, from, size, force } => {
+            let size_gb = size.unwrap_or_else(|| default_disk_gb(vmid));
+            let src = from.as_ref().map(std::path::PathBuf::from);
+            let st = storage.lock().await;
+            match st.provision(vmid, size_gb, src.as_deref(), force).await {
+                Ok(()) => Response::ok(serde_json::json!({"vmid": vmid, "size": size_gb})),
+                Err(e) => storage_error_response(&e),
+            }
+        }
+        Request::Delete { vmid } => {
+            if is_active(sup, vmid).await {
+                return Response::err("vm_active", "stop the VM before deleting its disk");
+            }
+            let st = storage.lock().await;
+            let lvs = match st.list_lvs().await {
+                Ok(l) => l,
+                Err(e) => return storage_error_response(&e),
+            };
+            match st.delete(vmid, &lvs).await {
+                Ok(()) => Response::ok(serde_json::json!({"vmid": vmid})),
+                Err(e) => storage_error_response(&e),
+            }
+        }
+        Request::Snapshot { vmid } => {
+            let qga_sock = active_qga_sock(sup, vmid).await;
+            let st = storage.lock().await;
+            match st.checkpoint(vmid, SnapKind::Manual, qga_sock).await {
+                Ok(cp) => Response::ok(serde_json::json!(to_checkpoint_info(&cp))),
+                Err(e) => storage_error_response(&e),
+            }
+        }
+        Request::Rollback { vmid, checkpoint } => {
+            if is_active(sup, vmid).await {
+                return Response::err("vm_active", "stop the VM before rolling back");
+            }
+            let st = storage.lock().await;
+            match st.rollback(vmid, &checkpoint).await {
+                Ok(()) => Response::ok(serde_json::json!({"vmid": vmid, "checkpoint": checkpoint})),
+                Err(e) => storage_error_response(&e),
+            }
+        }
+        Request::Snapshots { vmid } => {
+            let Some(id) = vmid else {
+                return Response::err("bad_request", "snapshots requires a vmid");
+            };
+            let st = storage.lock().await;
+            match st.checkpoints(id).await {
+                Ok(cps) => Response::ok(serde_json::json!(cps.iter().map(to_checkpoint_info).collect::<Vec<_>>())),
+                Err(e) => storage_error_response(&e),
+            }
+        }
     }
 }
 
-async fn handle_conn(stream: UnixStream, sup: Arc<Mutex<Supervisor>>, vms_dir: Arc<PathBuf>) {
+async fn handle_conn(
+    stream: UnixStream,
+    sup: Arc<Mutex<Supervisor>>,
+    storage: Arc<Mutex<Storage>>,
+    vms_dir: Arc<PathBuf>,
+) {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let resp = match serde_json::from_str::<Request>(&line) {
             Ok(req) => {
                 tracing::debug!(?req, "dispatch");
-                dispatch(&sup, &vms_dir, req).await
+                dispatch(&sup, &storage, &vms_dir, req).await
             }
             Err(e) => Response::err("bad_request", &e.to_string()),
         };
@@ -68,6 +172,7 @@ pub async fn serve(
     socket_path: &Path,
     vms_dir: PathBuf,
     sup: Arc<Mutex<Supervisor>>,
+    storage: Arc<Mutex<Storage>>,
 ) -> std::io::Result<()> {
     if socket_path.exists() {
         std::fs::remove_file(socket_path)?;
@@ -87,18 +192,23 @@ pub async fn serve(
             }
         };
         let sup = sup.clone();
+        let storage = storage.clone();
         let vms_dir = vms_dir.clone();
-        tokio::spawn(handle_conn(stream, sup, vms_dir));
+        tokio::spawn(handle_conn(stream, sup, storage, vms_dir));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::btrfs::RealBtrfs;
     use crate::config::{Console, Disk, DiskInterface, Firmware, Flavor, Net, NetModel, Resources, Vm, VmDef};
+    use crate::lvm::RealLvm;
     use crate::proto::VmState;
     use crate::qemu::RuntimePaths;
+    use crate::qga::RealQgaConnector;
     use crate::qmp::{QmpControl, QmpError};
+    use crate::storage::StorageConfig;
     use crate::supervisor::{Launcher, Spawned};
     use async_trait::async_trait;
     use std::time::Duration;
@@ -147,6 +257,15 @@ mod tests {
         }
     }
 
+    fn test_storage() -> Mutex<Storage> {
+        Mutex::new(Storage::new(
+            StorageConfig::default(),
+            Box::new(RealLvm),
+            Box::new(RealBtrfs),
+            Box::new(RealQgaConnector),
+        ))
+    }
+
     #[tokio::test]
     async fn dispatch_activate_then_status() {
         let dir = tempfile::tempdir().unwrap();
@@ -159,10 +278,10 @@ mod tests {
         ));
         let vms_dir = dir.path().to_path_buf();
 
-        let r = dispatch(&sup, &vms_dir, Request::Activate { id: "linux".into() }).await;
+        let r = dispatch(&sup, &test_storage(), &vms_dir, Request::Activate { id: "linux".into() }).await;
         assert!(r.ok);
 
-        let r = dispatch(&sup, &vms_dir, Request::Status { id: None }).await;
+        let r = dispatch(&sup, &test_storage(), &vms_dir, Request::Status { id: None }).await;
         assert!(r.ok);
         let info: crate::proto::VmInfo = serde_json::from_value(r.data.unwrap()).unwrap();
         assert_eq!(info.state, VmState::Running);
@@ -178,8 +297,29 @@ mod tests {
             Duration::from_millis(50),
             Box::new(OkLauncher),
         ));
-        let r = dispatch(&sup, dir.path(), Request::Activate { id: "ghost".into() }).await;
+        let r = dispatch(&sup, &test_storage(), dir.path(), Request::Activate { id: "ghost".into() }).await;
         assert!(!r.ok);
         assert_eq!(r.error.unwrap().kind, "unknown_id");
+    }
+
+    #[tokio::test]
+    async fn snapshots_without_vmid_is_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = Mutex::new(Supervisor::new(
+            vec![vm("linux")],
+            dir.path().join("run"),
+            dir.path().join("state.json"),
+            Duration::from_millis(50),
+            Box::new(OkLauncher),
+        ));
+        let r = dispatch(
+            &sup,
+            &test_storage(),
+            dir.path(),
+            Request::Snapshots { vmid: None },
+        )
+        .await;
+        assert!(!r.ok);
+        assert_eq!(r.error.unwrap().kind, "bad_request");
     }
 }

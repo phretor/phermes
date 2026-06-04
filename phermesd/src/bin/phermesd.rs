@@ -43,7 +43,15 @@ async fn main() -> anyhow::Result<()> {
     supervisor.readopt().await?;
 
     let sup = Arc::new(Mutex::new(supervisor));
+    let storage = Arc::new(Mutex::new(
+        phermesd::storage::Storage::new(
+            phermesd::storage::StorageConfig::default(),
+            Box::new(phermesd::lvm::RealLvm),
+            Box::new(phermesd::btrfs::RealBtrfs),
+            Box::new(phermesd::qga::RealQgaConnector),
+        ),
+    ));
     tracing::info!(socket = %args.socket.display(), "serving control socket");
-    serve(&args.socket, args.vms_dir, sup).await?;
+    serve(&args.socket, args.vms_dir, sup, storage).await?;
     Ok(())
 }

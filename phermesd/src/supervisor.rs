@@ -242,6 +242,16 @@ impl Supervisor {
         self.list()
     }
 
+    #[must_use]
+    pub fn active_vmid(&self) -> Option<u32> {
+        self.active.as_ref().and_then(|a| vmid_of(&a.id))
+    }
+
+    #[must_use]
+    pub fn active_qga_sock(&self) -> Option<std::path::PathBuf> {
+        self.active.as_ref().map(|a| a.rt.qga.clone())
+    }
+
     /// On startup, re-adopt a VM recorded as active if its process is still alive.
     ///
     /// # Errors
@@ -274,6 +284,15 @@ impl Supervisor {
         }
         State::default().save(&self.state_path)?;
         Ok(())
+    }
+}
+
+fn vmid_of(id: &str) -> Option<u32> {
+    match id {
+        "macos" => Some(100),
+        "windows" => Some(101),
+        "linux" => Some(102),
+        other => other.chars().filter(char::is_ascii_digit).collect::<String>().parse().ok(),
     }
 }
 
