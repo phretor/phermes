@@ -12,6 +12,7 @@ pub struct RuntimePaths {
     pub serial: PathBuf,
     pub vnc: PathBuf,
     pub pidfile: PathBuf,
+    pub qga: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -75,6 +76,18 @@ fn build_linux(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
         format!("unix:{},server=on,wait=off", rt.qmp.display()),
     );
     pair(&mut a, "-pidfile", rt.pidfile.display().to_string());
+
+    pair(&mut a, "-device", "virtio-serial-pci".to_string());
+    pair(
+        &mut a,
+        "-chardev",
+        format!("socket,path={},server=on,wait=off,id=qga0", rt.qga.display()),
+    );
+    pair(
+        &mut a,
+        "-device",
+        "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0".to_string(),
+    );
 
     let mut scsi_controller_added = false;
     for (i, disk) in d.disk.iter().enumerate() {
@@ -172,6 +185,7 @@ mod tests {
             serial: PathBuf::from("/run/phermesd/linux/serial.sock"),
             vnc: PathBuf::from("/run/phermesd/linux/vnc.sock"),
             pidfile: PathBuf::from("/run/phermesd/linux/vm.pid"),
+            qga: PathBuf::from("/run/phermesd/linux/qga.sock"),
         }
     }
 
@@ -285,5 +299,15 @@ mod tests {
             argv.last().unwrap(),
             "unix:/run/phermesd/linux/vnc.sock"
         );
+    }
+
+    #[test]
+    fn linux_argv_adds_guest_agent_channel() {
+        let argv = build_argv(&sample_vm(), &rt()).unwrap();
+        assert!(argv.iter().any(|a| a == "virtio-serial-pci"));
+        assert!(argv.iter().any(|a| a
+            == "socket,path=/run/phermesd/linux/qga.sock,server=on,wait=off,id=qga0"));
+        assert!(argv.iter().any(|a| a
+            == "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"));
     }
 }

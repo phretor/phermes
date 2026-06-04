@@ -96,6 +96,7 @@ impl Supervisor {
             serial: dir.join("serial.sock"),
             vnc: dir.join("vnc.sock"),
             pidfile: dir.join("vm.pid"),
+            qga: dir.join("qga.sock"),
         }
     }
 

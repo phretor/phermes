@@ -103,6 +103,7 @@ mod tests {
             serial: rtdir.join("serial.sock"),
             vnc: rtdir.join("vnc.sock"),
             pidfile: rtdir.join("vm.pid"),
+            qga: rtdir.join("qga.sock"),
         };
         QemuLauncher::prepare_runtime(&vm, &rt).unwrap();
         assert!(rt.vars.exists());
