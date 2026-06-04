@@ -264,8 +264,13 @@ impl Storage {
 
         let result = async {
             self.lvm.snapshot(&self.cfg.vg, &disk_name(vmid), &snap_name).await?;
+            let snap_dev = format!("/dev/{}/{snap_name}", self.cfg.vg);
+            if let Err(e) = self.lvm.add_tag(&snap_dev, SNAP_TAG).await {
+                let _ = self.lvm.remove(&snap_dev).await;
+                return Err(StorageError::from(e));
+            }
             if let Err(e) = self.btrfs.snapshot(&self.cfg.overlay, &overlay_dst).await {
-                let _ = self.lvm.remove(&format!("/dev/{}/{snap_name}", self.cfg.vg)).await;
+                let _ = self.lvm.remove(&snap_dev).await;
                 return Err(StorageError::from(e));
             }
             Ok::<(), StorageError>(())

@@ -115,6 +115,19 @@ async fn auto_checkpoint_refused_when_pool_above_threshold() {
 }
 
 #[tokio::test]
+async fn checkpoint_tags_the_lv_snapshot() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
+    let lvs_handle = lvm.lvs.clone();
+    let storage = Storage::new(cfg(), Box::new(lvm), Box::new(MockBtrfs::default()), Box::new(MockConnector::default()));
+    storage.checkpoint(102, phermesd::storage::SnapKind::Manual, None).await.unwrap();
+    let lvs = lvs_handle.lock().unwrap();
+    let snap = lvs.iter().find(|l| l.lv_name.starts_with("vm-102-disk-0-snap-manual-")).unwrap();
+    assert!(snap.tags.iter().any(|t| t == "@phermesd-snap"), "snapshot LV must be tagged @phermesd-snap");
+}
+
+#[tokio::test]
 async fn auto_prune_keeps_last_n() {
     let lvm = MockLvm::default();
     lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));

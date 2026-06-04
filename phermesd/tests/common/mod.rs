@@ -65,7 +65,7 @@ impl LvmOps for MockLvm {
 
     async fn snapshot(&self, _vg: &str, origin: &str, snap: &str) -> Result<(), LvmError> {
         locked(&self.calls).push(format!("snap {snap}"));
-        locked(&self.lvs).push(lv(snap, &["@phermesd-snap"], origin, None));
+        locked(&self.lvs).push(lv(snap, &[], origin, None));
         Ok(())
     }
 
