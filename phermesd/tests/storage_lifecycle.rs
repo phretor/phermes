@@ -257,3 +257,81 @@ async fn auto_checkpoint_refused_when_pool_above_threshold() {
         Err(StorageError::PoolFull { .. })
     ));
 }
+
+#[tokio::test]
+async fn auto_prune_keeps_last_n() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(5.0)));
+    // two pre-existing auto snaps; cfg() retention=2, so a 3rd prunes the oldest (20260101)
+    lvm.lvs.lock().unwrap().push(lv(
+        "vm-102-disk-0-snap-auto-20260101T000000Z",
+        &["@phermesd-snap"],
+        "vm-102-disk-0",
+        None,
+    ));
+    lvm.lvs.lock().unwrap().push(lv(
+        "vm-102-disk-0-snap-auto-20260102T000000Z",
+        &["@phermesd-snap"],
+        "vm-102-disk-0",
+        None,
+    ));
+    let storage = Storage::new(
+        cfg(),
+        Box::new(lvm),
+        Box::new(MockBtrfs::default()),
+        Box::new(MockConnector::default()),
+    );
+    storage.checkpoint(102, phermesd::storage::SnapKind::Auto, None).await.unwrap();
+    let cps = storage.checkpoints(102).await.unwrap();
+    let autos: Vec<_> = cps.iter().filter(|c| c.kind == phermesd::storage::SnapKind::Auto).collect();
+    assert_eq!(autos.len(), 2);
+    assert!(!autos.iter().any(|c| c.utc == "20260101T000000Z"));
+}
+
+#[tokio::test]
+async fn rollback_merges_disk_and_restores_overlay() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv(
+        "vm-102-disk-0-snap-manual-20260601T000000Z",
+        &["@phermesd-snap"],
+        "vm-102-disk-0",
+        None,
+    ));
+    let lvm_calls = lvm.calls.clone();
+    let btrfs = MockBtrfs::default();
+    let btrfs_calls = btrfs.calls.clone();
+    let storage = Storage::new(
+        cfg(),
+        Box::new(lvm),
+        Box::new(btrfs),
+        Box::new(MockConnector::default()),
+    );
+    storage.rollback(102, "20260601T000000Z").await.unwrap();
+    assert!(lvm_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c == "merge vm-102-disk-0-snap-manual-20260601T000000Z"));
+    let bc = btrfs_calls.lock().unwrap();
+    let del = bc.iter().position(|c| c.starts_with("delete"));
+    let res = bc.iter().position(|c| c.starts_with("restore"));
+    assert!(del.is_some() && res.is_some() && del < res, "delete must precede restore");
+}
+
+#[tokio::test]
+async fn rollback_unknown_checkpoint_errors() {
+    let lvm = MockLvm::default();
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["@phermesd"], "", None));
+    let storage = Storage::new(
+        cfg(),
+        Box::new(lvm),
+        Box::new(MockBtrfs::default()),
+        Box::new(MockConnector::default()),
+    );
+    assert!(matches!(
+        storage.rollback(102, "nope").await,
+        Err(StorageError::NotFound(_))
+    ));
+}

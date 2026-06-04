@@ -108,6 +108,18 @@ fn managed_disk(lvs: &[Lv], vmid: u32) -> Option<&Lv> {
     lvs.iter().find(|l| l.lv_name == name && l.tags.iter().any(|t| t == OWNER_TAG))
 }
 
+/// Parse `<disk>-snap-<kind>-<utc>` (given the `<disk>-snap-` prefix) into (kind, utc).
+fn parse_snap(lv_name: &str, prefix: &str) -> Option<(SnapKind, String)> {
+    let rest = lv_name.strip_prefix(prefix)?;
+    let (kind_s, utc) = rest.split_once('-')?;
+    let kind = match kind_s {
+        "auto" => SnapKind::Auto,
+        "manual" => SnapKind::Manual,
+        _ => return None,
+    };
+    Some((kind, utc.to_string()))
+}
+
 impl Storage {
     #[must_use]
     pub fn new(
@@ -285,9 +297,62 @@ impl Storage {
         }
     }
 
-    async fn prune_auto(&self, _vmid: u32) -> Result<(), StorageError> {
-        // retention pruning is implemented in S9; the await keeps this async for S9's signature
-        std::future::ready(Ok(())).await
+    /// List checkpoints for a VM (newest first).
+    ///
+    /// # Errors
+    /// Propagates LVM list errors.
+    pub async fn checkpoints(&self, vmid: u32) -> Result<Vec<Checkpoint>, StorageError> {
+        let lvs = self.lvm.list(&self.cfg.vg).await?;
+        let prefix = format!("{}-snap-", disk_name(vmid));
+        let mut cps: Vec<Checkpoint> = lvs
+            .iter()
+            .filter_map(|l| {
+                parse_snap(&l.lv_name, &prefix).map(|(kind, utc)| Checkpoint { vmid, utc, kind })
+            })
+            .collect();
+        cps.sort_by(|a, b| b.utc.cmp(&a.utc));
+        Ok(cps)
+    }
+
+    async fn prune_auto(&self, vmid: u32) -> Result<(), StorageError> {
+        let mut autos: Vec<Checkpoint> = self
+            .checkpoints(vmid)
+            .await?
+            .into_iter()
+            .filter(|c| c.kind == SnapKind::Auto)
+            .collect();
+        let keep = self.cfg.retention.min(autos.len());
+        for cp in autos.split_off(keep) {
+            self.remove_checkpoint(vmid, &cp).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove_checkpoint(&self, vmid: u32, cp: &Checkpoint) -> Result<(), StorageError> {
+        let snap = format!("{}-snap-{}-{}", disk_name(vmid), cp.kind.as_str(), cp.utc);
+        self.lvm.remove(&format!("/dev/{}/{snap}", self.cfg.vg)).await?;
+        let overlay = self.overlay_snap_path(cp.kind, &cp.utc);
+        self.btrfs.delete(&overlay).await?;
+        Ok(())
+    }
+
+    /// Roll back a stopped VM's disk + overlay to a checkpoint.
+    ///
+    /// # Errors
+    /// `NotFound` if the checkpoint is absent; LVM/Btrfs errors. The control layer ensures
+    /// the VM is stopped before calling this.
+    pub async fn rollback(&self, vmid: u32, utc: &str) -> Result<(), StorageError> {
+        let cps = self.checkpoints(vmid).await?;
+        let cp = cps
+            .iter()
+            .find(|c| c.utc == utc)
+            .ok_or_else(|| StorageError::NotFound(format!("checkpoint {utc} for vm {vmid}")))?;
+        let snap = format!("{}-snap-{}-{}", disk_name(vmid), cp.kind.as_str(), cp.utc);
+        self.lvm.merge(&self.cfg.vg, &snap).await?;
+        let ro = self.overlay_snap_path(cp.kind, &cp.utc);
+        self.btrfs.delete(&self.cfg.overlay).await?;
+        self.btrfs.restore(&ro, &self.cfg.overlay).await?;
+        Ok(())
     }
 }
 
