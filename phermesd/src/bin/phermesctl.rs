@@ -28,6 +28,24 @@ enum Cmd {
     Stop { id: Option<String> },
     /// Re-scan the definitions directory.
     Reload,
+    /// Provision a VM disk (optionally importing a local image).
+    Provision {
+        vmid: u32,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        size: Option<u32>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Delete a VM disk and its snapshots.
+    Delete { vmid: u32 },
+    /// Take a manual checkpoint (disk + overlay).
+    Snapshot { vmid: u32 },
+    /// Roll a stopped VM back to a checkpoint.
+    Rollback { vmid: u32, checkpoint: String },
+    /// List checkpoints for a VM.
+    Snapshots { vmid: u32 },
 }
 
 impl From<Cmd> for Request {
@@ -38,6 +56,11 @@ impl From<Cmd> for Request {
             Cmd::Activate { id } => Request::Activate { id },
             Cmd::Stop { id } => Request::Stop { id },
             Cmd::Reload => Request::Reload,
+            Cmd::Provision { vmid, from, size, force } => Request::Provision { vmid, from, size, force },
+            Cmd::Delete { vmid } => Request::Delete { vmid },
+            Cmd::Snapshot { vmid } => Request::Snapshot { vmid },
+            Cmd::Rollback { vmid, checkpoint } => Request::Rollback { vmid, checkpoint },
+            Cmd::Snapshots { vmid } => Request::Snapshots { vmid: Some(vmid) },
         }
     }
 }
