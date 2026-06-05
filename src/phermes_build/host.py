@@ -199,8 +199,10 @@ def etc_hosts_content(hostname: str, address: str = SMOKE_ADDRESS) -> str:
 
 
 def write_host_identity(mount_point: str, hostname: str = DEFAULT_HOSTNAME) -> None:
-    """Write /etc/hostname and /etc/hosts so the node name resolves — required
-    for pmxcfs (and thus qm/pveproxy) to start. The wizard can change it later."""
+    """Write /etc/hostname and /etc/hosts so the node name resolves locally.
+
+    The first-boot wizard can rename the host later.
+    """
     with open(os.path.join(mount_point, "etc/hostname"), "w") as f:
         f.write(hostname + "\n")
     with open(os.path.join(mount_point, "etc/hosts"), "w") as f:
@@ -214,8 +216,7 @@ def set_root_password(mount_point: str, password: str) -> None:
 
 def lock_root_account(mount_point: str) -> None:
     """Lock root so there is no console login. The production default — admin
-    happens through the PHermes UI / restricted Proxmox RBAC, never a shipped
-    password."""
+    happens through `phermesctl` over SSH, never a shipped password."""
     run_cmd(["chroot", mount_point, "passwd", "--lock", "root"])
 
 

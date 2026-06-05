@@ -56,7 +56,7 @@ docker-run disk:
 #   just smoke-inspect      # show partitions, LVM, Btrfs state
 #   just smoke-clean        # tear everything down, delete image
 #
-#   just smoke-full         # full Proxmox install when ready
+#   just smoke-full         # full host install when ready
 #   just smoke-run native=1 # use native phermes-build instead of Docker
 
 _smoke_image := "/tmp/phermes-smoke.img"
@@ -81,7 +81,7 @@ smoke-create:
     echo "$DISK" > {{_smoke_state}}
     echo "Ready: $DISK"
 
-# Disk setup only — skip Proxmox install. Docker by default; override with native=1
+# Disk setup only — skip host install. Docker by default; override with native=1
 smoke-run native="0":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -96,7 +96,7 @@ smoke-run native="0":
         sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     fi
 
-# Full Proxmox install (verbose). Docker by default; native=1 runs on the host
+# Full host install (verbose). Docker by default; native=1 runs on the host
 smoke-full native="0": (_smoke-build native "")
 
 # Shared build invocation; `extra` carries extra phermes-build flags
@@ -174,7 +174,7 @@ smoke-clean:
     #
     # The pve VG is removed when it belongs to a smoke run: its PV is our LUKS
     # mapping, or the PV is missing/unknown (orphaned by a crashed run whose loop
-    # is gone). A real Proxmox pve VG sits on a present physical disk and is left
+    # is gone). A pre-existing pve VG that sits on a real physical disk is left
     # untouched. With udev disabled, LVM can also leave an empty /dev/pve behind.
     DISK=$(cat {{_smoke_state}} 2>/dev/null || true)
     pv=$(sudo vgs --noheadings -o pv_name pve 2>/dev/null | tr -d '[:space:]' || true)

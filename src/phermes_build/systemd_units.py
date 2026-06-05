@@ -43,8 +43,8 @@ def phermesd_service_unit() -> str:
 def install_phermesd_unit(mount_point: str) -> None:
     """Write the unit into the chroot and create the multi-user.target.wants symlink.
 
-    Mirrors the trick used by the old install_pve_firstboot_init: there is no
-    running systemd in the chroot, so `systemctl enable` is unavailable.
+    There is no running systemd in the chroot, so `systemctl enable` is
+    unavailable; we create the `multi-user.target.wants` symlink by hand.
     """
     unit_path = os.path.join(mount_point, "etc/systemd/system/phermesd.service")
     os.makedirs(os.path.dirname(unit_path), exist_ok=True)

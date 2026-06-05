@@ -82,7 +82,7 @@ def test_install_minimal_host_calls_helpers_in_correct_order(monkeypatch, tmp_pa
             return ""
         return _impl
 
-    # Mock every reusable helper (currently re-exported from proxmox via host).
+    # Mock every reusable helper that install_minimal_host composes.
     for helper in [
         "format_boot_partitions",
         "run_debootstrap",

@@ -1,12 +1,6 @@
 from phermes_build import host_config as hc
 
 
-def test_nftables_blocks_8006_from_lan():
-    rules = hc.nftables_ruleset()
-    assert "8006" in rules
-    assert "127.0.0.1" in rules
-
-
 def test_nftables_allows_443_from_lan():
     rules = hc.nftables_ruleset()
     assert "443" in rules

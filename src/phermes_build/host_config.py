@@ -14,12 +14,8 @@ table inet filter {
         # LUKS unlock via Dropbear
         tcp dport 2222 accept
 
-        # PHermes web UI
+        # PHermes web UI (slice #4)
         tcp dport 443 accept
-
-        # Proxmox web UI: localhost only
-        tcp dport 8006 ip saddr != 127.0.0.1 drop
-        tcp dport 8006 ip saddr 127.0.0.1 accept
 
         ip protocol icmp accept
     }
