@@ -11,14 +11,18 @@ from phermes_build import (
     host_config,
     luks,
     lvm,
-    node_vm,
     partitioner,
-    proxmox,
-    vm,
+    systemd_units,  # noqa: F401  (imported for side-effects in install path)
+)
+from phermes_build import (
+    host as host_mod,
+)
+from phermes_build import (
+    vm as vm_mod,
 )
 from phermes_build.disk import compute_layout
 from phermes_build.firstboot import write_firstboot_flag, write_motd
-from phermes_build.models import AcquisitionMode, BuildConfig, VMConfig, VMFlavor
+from phermes_build.models import BuildConfig
 from phermes_build.runner import CommandError, run_cmd, set_verbose
 
 app = typer.Typer(name="phermes-build", help="PHermes SSD appliance builder")
@@ -46,14 +50,15 @@ def build(
     share_encrypted: Annotated[
         bool, typer.Option(help="Encrypt PHERMES_SHARE inside LUKS")
     ] = False,
-    import_vm_macos: Annotated[
-        str | None, typer.Option(help="Path to macOS QCOW2 to import")
+    import_vm: Annotated[
+        list[str] | None,
+        typer.Option(help="VM image to import: flavor=<path>, e.g. linux=/tmp/disk.qcow2"),
     ] = None,
-    download_vm: Annotated[
-        list[str] | None, typer.Option(help="VM flavors to download at build time")
-    ] = None,
+    no_vm: Annotated[
+        bool, typer.Option("--no-vm", help="Skip Linux VM provisioning.")
+    ] = False,
     skip_os_install: Annotated[
-        bool, typer.Option(help="Run disk setup only; skip Proxmox install (for testing)")
+        bool, typer.Option(help="Run disk setup only; skip host install (for testing)")
     ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Stream every command's output live")
@@ -71,13 +76,6 @@ def build(
             help="LUKS passphrase for a production build (or set PHERMES_LUKS_PASSPHRASE)",
         ),
     ] = None,
-    linux_node: Annotated[
-        bool,
-        typer.Option(
-            "--linux-node",
-            help="DEV: bundle a Debian node guest (cloud-init, SSH) to run Hermes / demo nesting",
-        ),
-    ] = False,
     dev_ssh_pubkey: Annotated[
         str | None,
         typer.Option(
@@ -96,43 +94,37 @@ def build(
         temp_luks_passphrase=_resolve_luks_passphrase(dev_credentials, luks_passphrase),
     )
 
-    if import_vm_macos:
-        cfg.vms.append(
-            VMConfig(
-                flavor=VMFlavor.MACOS,
-                mode=AcquisitionMode.IMPORT,
-                image_path=import_vm_macos,
-            )
-        )
-    for flavor_name in download_vm or []:
-        cfg.vms.append(
-            VMConfig(
-                flavor=VMFlavor(flavor_name),
-                mode=AcquisitionMode.DOWNLOAD,
-            )
-        )
+    # Validate --import-vm flavors early so we fail before touching the disk.
+    linux_source = _linux_source(import_vm or [])
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
     disk_steps = [
-        ("Partitioning SSD", lambda: partitioner.create_partition_table(layout)),
+        ("Partitioning SSD", lambda: _partition(layout)),
         ("Creating LUKS2 container", lambda: _setup_luks(layout, cfg)),
         ("Setting up LVM", lambda: _setup_lvm(layout)),
         ("Formatting Btrfs data partition", lambda: _setup_btrfs(layout)),
         ("Formatting exFAT share", lambda: _setup_exfat(layout)),
     ]
-    os_steps = [
-        ("Installing Proxmox VE", lambda: _install_proxmox(layout)),
+    os_steps: list[tuple[str, object]] = [
+        (
+            "Installing minimal Debian host + phermesd",
+            lambda: _install_minimal_host(layout),
+        ),
         (
             "Setting root credentials",
             lambda: _setup_credentials(dev_credentials, dev_ssh_pubkey),
         ),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
-        ("Provisioning VMs", lambda: _provision_vms(cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
-    if linux_node and not skip_os_install:
-        os_steps.append(("Installing Linux node VM (dev)", lambda: _install_node_vm()))
+    if not no_vm:
+        os_steps.append(
+            (
+                "Provisioning Linux VM",
+                lambda: _provision_linux_vm(source=linux_source),
+            )
+        )
 
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
@@ -144,7 +136,7 @@ def build(
     if skip_os_install:
         console.print("\n[bold yellow]Disk setup complete.[/bold yellow]")
         console.print("Partitions, LUKS2, LVM, and Btrfs are ready.")
-        console.print("Re-run without [bold]--skip-os-install[/bold] to install Proxmox VE.")
+        console.print("Re-run without [bold]--skip-os-install[/bold] to install the host.")
     else:
         console.print("\n[bold green]PHermes SSD ready.[/bold green]")
         console.print("Safely eject and boot the target machine.")
@@ -194,19 +186,33 @@ def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None)
     raise SystemExit(1)
 
 
+def _linux_source(import_vm_args: list[str]) -> str | None:
+    """Parse --import-vm linux=<path> (MVP only supports linux=)."""
+    for entry in import_vm_args:
+        flavor, _, path = entry.partition("=")
+        if flavor == "linux" and path:
+            return path
+        if flavor and flavor != "linux":
+            raise typer.BadParameter(
+                f"--import-vm flavor '{flavor}' is not supported in the MVP "
+                f"(only 'linux=<path>')."
+            )
+    return None
+
+
 def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None) -> None:
     """Dev builds get a known temp root password (+ optional SSH key); production
     locks root entirely."""
     if dev_credentials:
-        proxmox.set_root_password(PVE_ROOT_MOUNT, proxmox.TEMP_ROOT_PASSWORD)
+        host_mod.set_root_password(PVE_ROOT_MOUNT, host_mod.TEMP_ROOT_PASSWORD)
         if dev_ssh_pubkey:
-            proxmox.enable_dev_root_ssh(PVE_ROOT_MOUNT, dev_ssh_pubkey)
+            host_mod.enable_dev_root_ssh(PVE_ROOT_MOUNT, dev_ssh_pubkey)
     else:
-        proxmox.lock_root_account(PVE_ROOT_MOUNT)
+        host_mod.lock_root_account(PVE_ROOT_MOUNT)
 
 
-def _install_node_vm() -> None:
-    node_vm.install_node_vm(PVE_ROOT_MOUNT)
+def _partition(layout) -> None:
+    partitioner.create_partition_table(layout)
 
 
 def _setup_luks(layout, cfg: BuildConfig) -> None:
@@ -218,7 +224,7 @@ def _setup_luks(layout, cfg: BuildConfig) -> None:
 def _setup_lvm(layout) -> None:
     mapper = luks.mapper_path(LUKS_NAME)
     lvm.setup_lvm(mapper, layout.lvm_gb)
-    proxmox.format_root_lv("/dev/pve/root")
+    host_mod.format_root_lv("/dev/pve/root")
     lvm.create_btrfs_lv("pve", layout.data_gb)
 
 
@@ -236,16 +242,17 @@ def _setup_exfat(layout) -> None:
     exfat.format_exfat(share_part)
 
 
-def _install_proxmox(layout) -> None:
+def _install_minimal_host(layout) -> None:
+    """Install minimal Debian + phermesd into the mounted chroot."""
     os.makedirs(PVE_ROOT_MOUNT, exist_ok=True)
     run_cmd(["mount", "/dev/pve/root", PVE_ROOT_MOUNT])
     efi_part = partitioner.partition_path(layout.disk, 1)
     boot_part = partitioner.partition_path(layout.disk, 2)
     luks_part = partitioner.partition_path(layout.disk, 3)
-    proxmox.install_proxmox(
-        PVE_ROOT_MOUNT,
-        layout.disk,
-        luks_part,
+    host_mod.install_minimal_host(
+        mount_point=PVE_ROOT_MOUNT,
+        disk=layout.disk,
+        luks_device=luks_part,
         efi_device=efi_part,
         boot_device=boot_part,
     )
@@ -283,9 +290,9 @@ def _configure_host(layout, cfg: BuildConfig) -> None:
     write_motd(PVE_ROOT_MOUNT, hostname="phermes", ip_hint="<your-ip>")
 
 
-def _provision_vms(cfg: BuildConfig) -> None:
-    for vm_cfg in cfg.vms:
-        vm.provision_vm(vm_cfg)
+def _provision_linux_vm(source: str | None) -> None:
+    vm_mod.write_linux_def(PVE_ROOT_MOUNT)
+    vm_mod.provision_linux_disk(source=source)
 
 
 def _write_firstboot() -> None:

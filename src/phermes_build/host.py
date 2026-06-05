@@ -11,6 +11,7 @@ import shutil
 
 # Re-exported for now from proxmox.py — moved into this module in Task H9.
 from phermes_build.proxmox import (  # noqa: F401  (used by cli.py)
+    TEMP_ROOT_PASSWORD,
     _bind_chroot,
     _setup_policy_rcd,
     _teardown_policy_rcd,
