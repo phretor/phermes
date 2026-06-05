@@ -30,6 +30,7 @@ from phermes_build.proxmox import (  # noqa: F401  (used by cli.py)
     unmount_boot,
     write_host_identity,
 )
+from phermes_build.runner import run_cmd
 
 # Source for phermesd/phermesctl binaries inside the phermes-build image.
 # Populated by the Rust builder stage in Dockerfile.
@@ -93,3 +94,86 @@ def install_phermesd_binaries(mount_point: str) -> None:
         dst = os.path.join(target, binary)
         shutil.copy2(src, dst)
         os.chmod(dst, 0o755)
+
+
+def phermes_apt_packages() -> list[str]:
+    """Packages installed inside the chroot on the minimal phermesd host."""
+    return [
+        # Hypervisor + UEFI firmware + qemu-img (slice-#2 storage import)
+        "qemu-system-x86",
+        "qemu-utils",
+        "ovmf",
+        # phermesd storage layer shells to these
+        "lvm2",
+        "btrfs-progs",
+        # Boot / unlock
+        "cryptsetup-initramfs",
+        "dropbear-initramfs",
+        "grub-efi-amd64",
+        # Management surface (phermesctl over SSH; eth0 DHCP)
+        "openssh-server",
+        "isc-dhcp-client",
+        # Firewall + NAT (nftables only — iptables intentionally absent)
+        "nftables",
+        # Vmbr0 share + mDNS
+        "samba",
+        "avahi-daemon",
+    ]
+
+
+def install_minimal_host(
+    mount_point: str,
+    disk: str,
+    luks_device: str,
+    efi_device: str,
+    boot_device: str,
+) -> None:
+    """Full minimal-Debian + phermesd installation sequence into a mounted chroot.
+
+    The root LV is expected to be already mounted at `mount_point`. Formats the
+    EFI/boot partitions, debootstraps Debian, mounts /boot and /boot/efi, installs
+    the runtime apt set + the phermesd binaries + the systemd unit, installs a
+    removable-UEFI GRUB, regenerates initramfs.
+    """
+    # Local import to avoid an import cycle if systemd_units ever needs host.
+    from phermes_build import systemd_units
+
+    format_boot_partitions(efi_device, boot_device)
+    run_debootstrap(mount_point)
+    mount_boot(mount_point, efi_device, boot_device)
+    write_host_identity(mount_point)
+    write_network_interfaces(mount_point)
+
+    sources_path = os.path.join(mount_point, "etc/apt/sources.list")
+    os.makedirs(os.path.dirname(sources_path), exist_ok=True)
+    with open(sources_path, "w") as f:
+        f.write(debian_apt_sources())
+
+    crypttab_path = os.path.join(mount_point, "etc/crypttab")
+    os.makedirs(os.path.dirname(crypttab_path), exist_ok=True)
+    with open(crypttab_path, "w") as f:
+        f.write(crypttab_entry(luks_device, "phermes_luks"))
+
+    fstab_path = os.path.join(mount_point, "etc/fstab")
+    os.makedirs(os.path.dirname(fstab_path), exist_ok=True)
+    with open(fstab_path, "w") as f:
+        f.write(fstab_content())
+
+    grub_path = os.path.join(mount_point, "etc/default/grub")
+    os.makedirs(os.path.dirname(grub_path), exist_ok=True)
+    with open(grub_path, "w") as f:
+        f.write(grub_defaults_content())
+
+    _bind_chroot(mount_point)
+    _setup_policy_rcd(mount_point)
+    try:
+        run_cmd(["chroot", mount_point, "apt-get", "update"])
+        chroot_apt_install(mount_point, *phermes_apt_packages())
+        install_phermesd_binaries(mount_point)
+        systemd_units.install_phermesd_unit(mount_point)
+        install_grub(mount_point)
+        run_cmd(["chroot", mount_point, "update-initramfs", "-u", "-k", "all"])
+    finally:
+        _teardown_policy_rcd(mount_point)
+        _unbind_chroot(mount_point)
+        unmount_boot(mount_point)
