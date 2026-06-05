@@ -56,7 +56,7 @@ docker-run disk:
 #   just smoke-inspect      # show partitions, LVM, Btrfs state
 #   just smoke-clean        # tear everything down, delete image
 #
-#   just smoke-full         # full Proxmox install when ready
+#   just smoke-full         # full host install when ready
 #   just smoke-run native=1 # use native phermes-build instead of Docker
 
 _smoke_image := "/tmp/phermes-smoke.img"
@@ -81,7 +81,7 @@ smoke-create:
     echo "$DISK" > {{_smoke_state}}
     echo "Ready: $DISK"
 
-# Disk setup only — skip Proxmox install. Docker by default; override with native=1
+# Disk setup only — skip host install. Docker by default; override with native=1
 smoke-run native="0":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -96,13 +96,10 @@ smoke-run native="0":
         sudo docker run --rm --privileged -v /dev:/dev -v "$PWD/src:/app/src:ro" phermes-build "$DISK" --share-size 0 --skip-os-install --verbose --dev-credentials
     fi
 
-# Full Proxmox install (verbose). Docker by default; native=1 runs on the host
+# Full host install (verbose). Docker by default; native=1 runs on the host
 smoke-full native="0": (_smoke-build native "")
 
-# Like smoke-full but also bundles a Debian Linux node guest (run phermes-node after boot)
-smoke-full-node native="0": (_smoke-build native "--linux-node")
-
-# Shared build invocation; `extra` carries extra phermes-build flags (e.g. --toy-vm)
+# Shared build invocation; `extra` carries extra phermes-build flags
 [private]
 _smoke-build native extra:
     #!/usr/bin/env bash
@@ -167,26 +164,6 @@ smoke-ssh command="":
         ssh "${args[@]}" root@localhost
     fi
 
-# Boot the Linux node VM and attach to its serial console (exit qm terminal with Ctrl-O)
-smoke-node:
-    ssh -t -p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-        root@localhost "phermes-node"
-
-# SSH into the Linux node VM (dev@10.10.10.2) via the PHermes host as a jump
-smoke-node-ssh command="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    base=(-i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes
-          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-    jump="ssh ${base[*]} -W %h:%p -p 2200 root@localhost"
-    args=("${base[@]}" -o ProxyCommand="$jump")
-    if [ -n "{{command}}" ]; then
-        ssh "${args[@]}" dev@10.10.10.2 "{{command}}"
-    else
-        ssh "${args[@]}" dev@10.10.10.2
-    fi
-
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
 smoke-clean:
     #!/usr/bin/env bash
@@ -197,7 +174,7 @@ smoke-clean:
     #
     # The pve VG is removed when it belongs to a smoke run: its PV is our LUKS
     # mapping, or the PV is missing/unknown (orphaned by a crashed run whose loop
-    # is gone). A real Proxmox pve VG sits on a present physical disk and is left
+    # is gone). A pre-existing pve VG that sits on a real physical disk is left
     # untouched. With udev disabled, LVM can also leave an empty /dev/pve behind.
     DISK=$(cat {{_smoke_state}} 2>/dev/null || true)
     pv=$(sudo vgs --noheadings -o pv_name pve 2>/dev/null | tr -d '[:space:]' || true)

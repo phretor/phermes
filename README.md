@@ -48,16 +48,16 @@ Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](
 
 ## What it is
 
-PHermes packages Hermes Agent inside a QEMU/KVM virtual machine (macOS by default,
-Windows and Linux also supported) running on a Proxmox VE host. The entire stack lives
-on a single SSD. No cloud. No installation on the host. Unplug and take it anywhere.
+PHermes packages Hermes Agent inside a QEMU/KVM virtual machine running on a minimal
+Debian host managed by `phermesd`. The entire stack lives on a single SSD. No cloud.
+No installation on the host. Unplug and take it anywhere.
 Still want to host it in the cloud? Import the disk volume into your favorite cloud provider's stack.
 
-**Boot chain:** `EFI → GRUB → Proxmox VE → QEMU/KVM VM → Hermes`
+**Boot chain:** `EFI → GRUB → minimal Debian → phermesd → Linux guest → Hermes`
 
-The Proxmox management interface is invisible to end users. PHermes replaces it with a
-purpose-built web UI that exposes only what matters: VM console, Hermes dashboard, storage,
-and system controls.
+The `phermesd` daemon is invisible to end users. PHermes wraps it with a purpose-built
+web UI that exposes only what matters: VM console, Hermes dashboard, storage, and system
+controls.
 
 ## Security
 
@@ -124,8 +124,8 @@ boot chain works on emulated hardware, all the way up to a guest running an AI a
 ```
 your machine
 └─ QEMU (KVM, nested)
-   └─ PHermes — LUKS2-encrypted SSD → GRUB → Proxmox VE host   ← built by phermes-build
-      └─ Debian node VM (nested KVM, cloud-init)
+   └─ PHermes — LUKS2-encrypted SSD → GRUB → minimal Debian → phermesd → Linux guest
+      └─ Linux guest VM (KVM)
          └─ Hermes Agent
             ● What hostname are you running into?
               → I'm running on hostname: phermes-node
@@ -136,8 +136,8 @@ your machine
 ```
 
 What works today: SSD partitioning, LUKS2 full-disk encryption, LVM-thin + Btrfs, a
-Proxmox VE host installed from upstream and booting under UEFI, encrypted-root unlock,
-and a nested Linux guest (Debian, glibc) that runs the Hermes runtime — exercised by a
+minimal Debian host running `phermesd` under UEFI with encrypted-root unlock,
+and a Linux guest (Debian, glibc) that runs the Hermes runtime — exercised by a
 loop-device + QEMU smoke harness (`just smoke-*`) with serial console and dev SSH.
 
 Not yet built: the first-boot wizard, the PHermes web UI, VM-flavor switching, and the
@@ -149,7 +149,7 @@ Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs
 
 ### phermesd (in development)
 
-`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Slice #2 (implemented) adds storage & snapshots: it provisions LVM-thin VM disks, imports local images, and takes QGA-quiesced checkpoints of the VM disk and Btrfs overlay together — auto-snapshotting before a VM switch — with retention pruning, a thin-pool capacity guard, and one-command rollback (`phermesctl provision|snapshot|rollback|snapshots`). Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md), [`docs/superpowers/specs/2026-06-03-phermesd-storage-design.md`](docs/superpowers/specs/2026-06-03-phermesd-storage-design.md).
+`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Slice #2 (implemented) adds storage & snapshots: it provisions LVM-thin VM disks, imports local images, and takes QGA-quiesced checkpoints of the VM disk and Btrfs overlay together — auto-snapshotting before a VM switch — with retention pruning, a thin-pool capacity guard, and one-command rollback (`phermesctl provision|snapshot|rollback|snapshots`). Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md), [`docs/superpowers/specs/2026-06-03-phermesd-storage-design.md`](docs/superpowers/specs/2026-06-03-phermesd-storage-design.md). Slice #6 MVP (implemented): the appliance now boots a minimal Debian host running phermesd directly — no Proxmox VE. Management is `phermesctl` over SSH; `--import-vm linux=<path>` provisions a Linux VM at install time; `--no-vm` installs the host alone. Design: [`docs/superpowers/specs/2026-06-04-phermesd-host-image-mvp-design.md`](docs/superpowers/specs/2026-06-04-phermesd-host-image-mvp-design.md).
 
 ## Hardware requirements
 

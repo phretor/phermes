@@ -1,9 +1,3 @@
-from phermes_build.runner import run_cmd
-
-PHERMES_ROLE = "PHermesUser"
-PHERMES_USER_REALM = "pve"
-
-
 def nftables_ruleset() -> str:
     return """\
 #!/usr/sbin/nft -f
@@ -20,12 +14,8 @@ table inet filter {
         # LUKS unlock via Dropbear
         tcp dport 2222 accept
 
-        # PHermes web UI
+        # PHermes web UI (slice #4)
         tcp dport 443 accept
-
-        # Proxmox web UI: localhost only
-        tcp dport 8006 ip saddr != 127.0.0.1 drop
-        tcp dport 8006 ip saddr 127.0.0.1 accept
 
         ip protocol icmp accept
     }
@@ -42,6 +32,13 @@ table inet filter {
 
         oifname != "vmbr0" tcp dport 445 drop
         oifname != "vmbr0" udp dport 445 drop
+    }
+}
+
+table ip nat {
+    chain postrouting {
+        type nat hook postrouting priority 100;
+        ip saddr 10.10.10.0/24 oifname "eth0" masquerade
     }
 }
 """
@@ -88,12 +85,3 @@ def avahi_service_config() -> str:
   </service>
 </service-group>
 """
-
-
-def configure_proxmox_rbac(username: str, password: str) -> None:
-    run_cmd(["pveum", "role", "add", PHERMES_ROLE,
-             "--privs", "VM.Console,VM.PowerMgmt,VM.Audit"])
-    run_cmd(["pveum", "user", "add", f"{username}@{PHERMES_USER_REALM}",
-             "--password", password, "--comment", "PHermes end user"])
-    run_cmd(["pveum", "aclmod", "/", "--user", f"{username}@{PHERMES_USER_REALM}",
-             "--role", PHERMES_ROLE])
