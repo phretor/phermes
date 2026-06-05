@@ -1,73 +1,93 @@
-import json
+"""Linux VM provisioning at install time (phermesd-based).
+
+Linux-only for the MVP — Windows + macOS return in #5. Conventions (VG/pool/tag
+names, vmid) MUST stay aligned with phermesd's storage module
+(`phermesd/src/storage.rs`); a CI grep is a future hardening pass.
+"""
+
 import os
 
-from phermes_build.models import AcquisitionMode, VMConfig, VMFlavor
 from phermes_build.runner import run_cmd
 
-_VM_IDS: dict[VMFlavor, int] = {
-    VMFlavor.MACOS: 100,
-    VMFlavor.WINDOWS: 101,
-    VMFlavor.LINUX: 102,
-}
+# Mirror phermesd's storage conventions. See phermesd/src/storage.rs and
+# docs/superpowers/specs/2026-06-03-phermesd-storage-design.md.
+STORAGE_VG = "pve"
+STORAGE_POOL = "data"
+OWNER_TAG = "phermesd"
+LINUX_VMID = 102
 
-_VM_DISK_GB: dict[VMFlavor, int] = {
-    VMFlavor.MACOS: 120,
-    VMFlavor.WINDOWS: 100,
-    VMFlavor.LINUX: 40,
-}
-
-
-def vm_id_for_flavor(flavor: VMFlavor) -> int:
-    return _VM_IDS[flavor]
+DEFAULT_DISK_GB = 40
+DEFAULT_MEMORY_MIB = 4096
+DEFAULT_VCPUS = 4
 
 
-def proxmox_vm_config(flavor: VMFlavor, vm_id: int, disk_gb: int) -> str:
-    base = (
-        f"vmid: {vm_id}\n"
-        f"machine: q35\n"
-        f"bios: ovmf\n"
-        f"boot: order=scsi0\n"
-        f"scsihw: virtio-scsi-pci\n"
-        f"scsi0: local-lvm:vm-{vm_id}-disk-0,size={disk_gb}G\n"
-        f"cores: 4\n"
-        f"cpu: host\n"
+def _linux_def_text(*, memory_mib: int, vcpus: int) -> str:
+    """Render /etc/phermes/vms/linux.toml content.
+
+    Production conventions:
+      * raw block device at /dev/<vg>/vm-<vmid>-disk-0
+      * vmbr0 bridge (set up by host.write_network_interfaces)
+      * virtio-scsi + virtio-net (perf + driver availability in Linux guests)
+      * serial + vnc unix sockets exposed (slice #4's console proxy reads them)
+    """
+    return (
+        f'flavor = "linux"\n'
+        f"[resources]\n"
+        f"memory_mib = {memory_mib}\n"
+        f"vcpus = {vcpus}\n"
+        f'cpu = "host"\n'
+        f"[firmware]\n"
+        f'ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"\n'
+        f'ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"\n'
+        f"[[disk]]\n"
+        f'path = "/dev/{STORAGE_VG}/vm-{LINUX_VMID}-disk-0"\n'
+        f'format = "raw"\n'
+        f'interface = "virtio-scsi"\n'
+        f"[[net]]\n"
+        f'bridge = "vmbr0"\n'
+        f'model = "virtio-net"\n'
+        f"[console]\n"
+        f"serial = true\n"
+        f"vnc = true\n"
     )
-    if flavor == VMFlavor.MACOS:
-        return base + (
-            "vga: vmware\n"
-            "net0: vmxnet3,bridge=vmbr0\n"
-            "args: -cpu Penryn,kvm=on,vendor=GenuineIntel,"
-            "+kvm_pv_unhalt,+kvm_pv_eoi,+hypervisor,+invtsc\n"
-        )
-    return base + (
-        "vga: virtio\n"
-        "net0: virtio,bridge=vmbr0\n"
+
+
+def write_linux_def(
+    chroot_mount: str,
+    *,
+    memory_mib: int = DEFAULT_MEMORY_MIB,
+    vcpus: int = DEFAULT_VCPUS,
+) -> None:
+    """Write /etc/phermes/vms/linux.toml inside the chroot."""
+    vms_dir = os.path.join(chroot_mount, "etc/phermes/vms")
+    os.makedirs(vms_dir, exist_ok=True)
+    def_path = os.path.join(vms_dir, "linux.toml")
+    with open(def_path, "w") as f:
+        f.write(_linux_def_text(memory_mib=memory_mib, vcpus=vcpus))
+
+
+def provision_linux_disk(
+    size_gb: int = DEFAULT_DISK_GB,
+    source: str | None = None,
+) -> None:
+    """Create the thin LV, tag it 'phermesd', optionally populate from a local image.
+
+    Runs against the host's live VG (the one phermes-build just created), NOT
+    against a chroot. Caller ensures the VG `pve` and thin pool `data` exist.
+    """
+    disk_name = f"vm-{LINUX_VMID}-disk-0"
+    device = f"/dev/{STORAGE_VG}/{disk_name}"
+    run_cmd(
+        [
+            "lvcreate",
+            "--thin",
+            "--virtualsize",
+            f"{size_gb}G",
+            f"{STORAGE_VG}/{STORAGE_POOL}",
+            "-n",
+            disk_name,
+        ]
     )
-
-
-def import_vm(cfg: VMConfig, vm_id: int, storage: str = "local-lvm") -> None:
-    if cfg.mode != AcquisitionMode.IMPORT or cfg.image_path is None:
-        raise ValueError("import_vm requires mode=IMPORT and image_path set")
-    run_cmd(["qm", "importdisk", str(vm_id), cfg.image_path, storage])
-
-
-def schedule_vm_acquisition(cfg: VMConfig, flag_dir: str = "/var/lib/phermes") -> None:
-    os.makedirs(flag_dir, exist_ok=True)
-    flag_path = os.path.join(flag_dir, f"acquire_{cfg.flavor.value}.json")
-    with open(flag_path, "w") as f:
-        json.dump({"flavor": cfg.flavor.value, "mode": cfg.mode.value}, f)
-
-
-def provision_vm(cfg: VMConfig, storage: str = "local-lvm") -> None:
-    vm_id = vm_id_for_flavor(cfg.flavor)
-    disk_gb = _VM_DISK_GB[cfg.flavor]
-
-    conf = proxmox_vm_config(cfg.flavor, vm_id, disk_gb)
-    conf_path = f"/etc/pve/qemu-server/{vm_id}.conf"
-    with open(conf_path, "w") as f:
-        f.write(conf)
-
-    if cfg.mode == AcquisitionMode.IMPORT:
-        import_vm(cfg, vm_id, storage)
-    elif cfg.mode in (AcquisitionMode.DOWNLOAD, AcquisitionMode.SKIP):
-        schedule_vm_acquisition(cfg)
+    run_cmd(["lvchange", "--addtag", OWNER_TAG, device])
+    if source is not None:
+        run_cmd(["qemu-img", "convert", "-O", "raw", source, device])
