@@ -231,3 +231,7 @@ phermesd-test:
 phermesd-e2e disk bridge="vmbr0":
     cd phermesd && PHERMESD_E2E_DISK={{disk}} PHERMESD_E2E_BRIDGE={{bridge}} \
         cargo test --test e2e_boot -- --ignored --nocapture
+
+# Storage integration (real LVM-thin + Btrfs on loop devices; needs root)
+phermesd-storage-it:
+    cd phermesd && sudo -E $(command -v cargo) test --test storage_integration -- --ignored --nocapture

@@ -74,6 +74,7 @@ pub struct Supervisor {
     stop_timeout: Duration,
     launcher: Box<dyn Launcher>,
     active: Option<Active>,
+    storage: Option<std::sync::Arc<tokio::sync::Mutex<crate::storage::Storage>>>,
 }
 
 impl Supervisor {
@@ -85,7 +86,14 @@ impl Supervisor {
         stop_timeout: Duration,
         launcher: Box<dyn Launcher>,
     ) -> Self {
-        Self { vms, run_root, state_path, stop_timeout, launcher, active: None }
+        Self { vms, run_root, state_path, stop_timeout, launcher, active: None, storage: None }
+    }
+
+    pub fn set_storage(
+        &mut self,
+        storage: std::sync::Arc<tokio::sync::Mutex<crate::storage::Storage>>,
+    ) {
+        self.storage = Some(storage);
     }
 
     fn runtime_paths(&self, id: &str) -> RuntimePaths {
@@ -96,6 +104,7 @@ impl Supervisor {
             serial: dir.join("serial.sock"),
             vnc: dir.join("vnc.sock"),
             pidfile: dir.join("vm.pid"),
+            qga: dir.join("qga.sock"),
         }
     }
 
@@ -172,6 +181,19 @@ impl Supervisor {
                 let vm = self.find(id)?;
                 return Ok(self.info_for(vm));
             }
+            // Safety checkpoint of the outgoing VM before the switch. Best-effort:
+            // a failure (e.g. pool guard) warns and continues — never blocks the switch.
+            let out_vmid = vmid_of(&active.id);
+            let out_qga = active.rt.qga.clone();
+            if let (Some(storage), Some(out_vmid)) = (self.storage.clone(), out_vmid) {
+                let st = storage.lock().await;
+                if let Err(e) =
+                    st.checkpoint(out_vmid, crate::storage::SnapKind::Auto, Some(out_qga)).await
+                {
+                    tracing::warn!(vmid = out_vmid, error = %e,
+                        "auto-checkpoint before switch failed; continuing");
+                }
+            }
             self.stop(None).await?;
         }
         let vm = self.find(id)?.clone();
@@ -241,6 +263,16 @@ impl Supervisor {
         self.list()
     }
 
+    #[must_use]
+    pub fn active_vmid(&self) -> Option<u32> {
+        self.active.as_ref().and_then(|a| vmid_of(&a.id))
+    }
+
+    #[must_use]
+    pub fn active_qga_sock(&self) -> Option<std::path::PathBuf> {
+        self.active.as_ref().map(|a| a.rt.qga.clone())
+    }
+
     /// On startup, re-adopt a VM recorded as active if its process is still alive.
     ///
     /// # Errors
@@ -273,6 +305,15 @@ impl Supervisor {
         }
         State::default().save(&self.state_path)?;
         Ok(())
+    }
+}
+
+fn vmid_of(id: &str) -> Option<u32> {
+    match id {
+        "macos" => Some(100),
+        "windows" => Some(101),
+        "linux" => Some(102),
+        other => other.chars().filter(char::is_ascii_digit).collect::<String>().parse().ok(),
     }
 }
 

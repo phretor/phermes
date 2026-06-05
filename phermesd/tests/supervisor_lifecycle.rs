@@ -1,5 +1,8 @@
 //! Exercises the supervisor state machine with a mock launcher (no QEMU, no QMP socket).
 
+mod common;
+use common::{cfg, lv, MockBtrfs, MockConnector, MockLvm};
+
 use async_trait::async_trait;
 use phermesd::config::{Console, Disk, DiskInterface, Firmware, Flavor, Net, NetModel, Resources, Vm, VmDef};
 use phermesd::proto::VmState;
@@ -348,4 +351,70 @@ async fn status_reports_failed_when_active_pid_dies() {
     assert_eq!(info.state, VmState::Running);
     alive.store(false, Ordering::SeqCst);
     assert_eq!(sup.status(None).unwrap().state, VmState::Failed);
+}
+
+#[tokio::test]
+async fn switch_auto_checkpoints_outgoing_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    let lvm = MockLvm::default();
+    // outgoing linux=vmid 102 must be a managed disk + a pool row for the guard
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(10.0)));
+    let lvm_calls = lvm.calls.clone();
+    let storage = std::sync::Arc::new(tokio::sync::Mutex::new(phermesd::storage::Storage::new(
+        cfg(),
+        Box::new(lvm),
+        Box::new(MockBtrfs::default()),
+        Box::new(MockConnector::default()),
+    )));
+
+    let (launcher, _killed, _cleaned) = MockLauncher::new(true);
+    let mut sup = Supervisor::new(
+        vec![vm("linux"), vm("windows")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(launcher),
+    );
+    sup.set_storage(storage.clone());
+
+    sup.activate("linux").await.unwrap();
+    let info = sup.activate("windows").await.unwrap();
+    assert_eq!(info.state, VmState::Running);
+
+    // an auto checkpoint LV snapshot for vm-102 was taken before the switch
+    let calls = lvm_calls.lock().unwrap();
+    assert!(
+        calls.iter().any(|c| c.starts_with("snap vm-102-disk-0-snap-auto-")),
+        "expected an auto snapshot of the outgoing VM, calls = {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn switch_continues_when_auto_checkpoint_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let lvm = MockLvm::default();
+    // pool at 95% -> auto checkpoint refused (PoolFull); switch must still succeed
+    lvm.lvs.lock().unwrap().push(lv("vm-102-disk-0", &["phermesd"], "", None));
+    lvm.lvs.lock().unwrap().push(lv("data", &[], "", Some(95.0)));
+    let storage = std::sync::Arc::new(tokio::sync::Mutex::new(phermesd::storage::Storage::new(
+        cfg(),
+        Box::new(lvm),
+        Box::new(MockBtrfs::default()),
+        Box::new(MockConnector::default()),
+    )));
+
+    let (launcher, _killed, _cleaned) = MockLauncher::new(true);
+    let mut sup = Supervisor::new(
+        vec![vm("linux"), vm("windows")],
+        dir.path().join("run"),
+        dir.path().join("state.json"),
+        Duration::from_millis(100),
+        Box::new(launcher),
+    );
+    sup.set_storage(storage.clone());
+
+    sup.activate("linux").await.unwrap();
+    let info = sup.activate("windows").await.unwrap();
+    assert_eq!(info.state, VmState::Running); // warn-and-continue
 }

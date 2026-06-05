@@ -20,6 +20,36 @@ pub enum Request {
         id: Option<String>,
     },
     Reload,
+    Provision {
+        vmid: u32,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        size: Option<u32>,
+        #[serde(default)]
+        force: bool,
+    },
+    Delete {
+        vmid: u32,
+    },
+    Snapshot {
+        vmid: u32,
+    },
+    Rollback {
+        vmid: u32,
+        checkpoint: String,
+    },
+    Snapshots {
+        #[serde(default)]
+        vmid: Option<u32>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointInfo {
+    pub vmid: u32,
+    pub utc: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +124,12 @@ pub fn encode_line<T: Serialize>(value: &T) -> Result<String, serde_json::Error>
 mod tests {
     use super::*;
     use crate::config::Flavor;
+
+    #[test]
+    fn provision_request_round_trips() {
+        let r: Request = serde_json::from_str(r#"{"cmd":"provision","vmid":102,"size":40}"#).unwrap();
+        assert_eq!(r, Request::Provision { vmid: 102, from: None, size: Some(40), force: false });
+    }
 
     #[test]
     fn request_activate_round_trips() {

@@ -149,7 +149,7 @@ Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs
 
 ### phermesd (in development)
 
-`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md); plan: [`docs/superpowers/plans/2026-06-03-phermesd-slice1.md`](docs/superpowers/plans/2026-06-03-phermesd-slice1.md).
+`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Slice #2 (implemented) adds storage & snapshots: it provisions LVM-thin VM disks, imports local images, and takes QGA-quiesced checkpoints of the VM disk and Btrfs overlay together — auto-snapshotting before a VM switch — with retention pruning, a thin-pool capacity guard, and one-command rollback (`phermesctl provision|snapshot|rollback|snapshots`). Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md), [`docs/superpowers/specs/2026-06-03-phermesd-storage-design.md`](docs/superpowers/specs/2026-06-03-phermesd-storage-design.md).
 
 ## Hardware requirements
 
