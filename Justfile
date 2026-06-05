@@ -99,10 +99,7 @@ smoke-run native="0":
 # Full Proxmox install (verbose). Docker by default; native=1 runs on the host
 smoke-full native="0": (_smoke-build native "")
 
-# Like smoke-full but also bundles a Debian Linux node guest (run phermes-node after boot)
-smoke-full-node native="0": (_smoke-build native "--linux-node")
-
-# Shared build invocation; `extra` carries extra phermes-build flags (e.g. --toy-vm)
+# Shared build invocation; `extra` carries extra phermes-build flags
 [private]
 _smoke-build native extra:
     #!/usr/bin/env bash
@@ -165,26 +162,6 @@ smoke-ssh command="":
         ssh "${args[@]}" root@localhost "{{command}}"
     else
         ssh "${args[@]}" root@localhost
-    fi
-
-# Boot the Linux node VM and attach to its serial console (exit qm terminal with Ctrl-O)
-smoke-node:
-    ssh -t -p 2200 -i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-        root@localhost "phermes-node"
-
-# SSH into the Linux node VM (dev@10.10.10.2) via the PHermes host as a jump
-smoke-node-ssh command="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    base=(-i .dev-ssh/id_ed25519 -o IdentitiesOnly=yes
-          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-    jump="ssh ${base[*]} -W %h:%p -p 2200 root@localhost"
-    args=("${base[@]}" -o ProxyCommand="$jump")
-    if [ -n "{{command}}" ]; then
-        ssh "${args[@]}" dev@10.10.10.2 "{{command}}"
-    else
-        ssh "${args[@]}" dev@10.10.10.2
     fi
 
 # Tear down smoke session: deactivate VG, close LUKS, detach loop, delete image
