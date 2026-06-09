@@ -111,6 +111,10 @@ fn build_linux(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
             DiskInterface::VirtioBlk => {
                 pair(&mut a, "-device", format!("virtio-blk-pci,drive=disk{i}"));
             }
+            DiskInterface::Cdrom => {
+                // Real CDROM argv emission implemented in Task C2.
+                // No test fixture in C1 exercises this branch.
+            }
         }
     }
 
