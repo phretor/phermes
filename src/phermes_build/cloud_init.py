@@ -8,7 +8,12 @@ the guest as a CDROM (see slice #1's DiskInterface::Cdrom).
 Linux-only. Windows + macOS don't use NoCloud — they return in #5.
 """
 
+import os
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from phermes_build.runner import run_cmd
 
 
 @dataclass(frozen=True)
@@ -62,3 +67,40 @@ def vendor_data_yaml(cfg: SeedConfig) -> str:
         "'curl -LsSf https://astral.sh/uv/install.sh | "
         "env UV_INSTALL_DIR=/usr/local/bin sh' ]\n"
     )
+
+
+def write_seed_iso(out_path: str, cfg: SeedConfig) -> None:
+    """Render meta-data/user-data/vendor-data and pack them into a CIDATA ISO.
+
+    The resulting ISO9660 image has volume label CIDATA so cloud-init's NoCloud
+    datasource auto-detects it on any block device.
+
+    Raises ValueError if cfg.ssh_authorized_keys is empty (a key-only login with
+    zero keys would lock the operator out of the dev VM).
+    """
+    if not cfg.ssh_authorized_keys:
+        raise ValueError(
+            "SeedConfig.ssh_authorized_keys must contain at least one key"
+        )
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        (tmp_dir / "meta-data").write_text(meta_data_yaml(cfg))
+        (tmp_dir / "user-data").write_text(user_data_yaml(cfg))
+        (tmp_dir / "vendor-data").write_text(vendor_data_yaml(cfg))
+        run_cmd(
+            [
+                "genisoimage",
+                "-output",
+                out_path,
+                "-volid",
+                "CIDATA",
+                "-joliet",
+                "-rock",
+                str(tmp_dir / "meta-data"),
+                str(tmp_dir / "user-data"),
+                str(tmp_dir / "vendor-data"),
+            ]
+        )
