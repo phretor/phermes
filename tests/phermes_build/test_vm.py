@@ -87,3 +87,36 @@ def test_provision_linux_disk_custom_size(monkeypatch):
     calls = _capture(monkeypatch)
     vm_mod.provision_linux_disk(size_gb=100)
     assert "100G" in calls[0]
+
+
+def test_constants_for_seed_paths_exposed():
+    assert vm_mod.SEED_DIR == "/var/lib/phermes/seed"
+    assert vm_mod.LINUX_SEED_PATH == "/var/lib/phermes/seed/linux.iso"
+
+
+def test_write_linux_def_omits_seed_cdrom_when_seed_iso_path_is_none(tmp_path):
+    chroot = str(tmp_path / "chroot")
+    import os as _os
+    _os.makedirs(chroot)
+    vm_mod.write_linux_def(chroot)  # default: no seed
+    content = (tmp_path / "chroot" / "etc/phermes/vms/linux.toml").read_text()
+    # The OS disk is present
+    assert 'path = "/dev/pve/vm-102-disk-0"' in content
+    # No CDROM
+    assert "cdrom" not in content
+    assert "seed" not in content
+
+
+def test_write_linux_def_emits_seed_cdrom_when_seed_iso_path_given(tmp_path):
+    chroot = str(tmp_path / "chroot")
+    import os as _os
+    _os.makedirs(chroot)
+    vm_mod.write_linux_def(chroot, seed_iso_path="/var/lib/phermes/seed/linux.iso")
+    content = (tmp_path / "chroot" / "etc/phermes/vms/linux.toml").read_text()
+    # Both disks present
+    assert 'path = "/dev/pve/vm-102-disk-0"' in content
+    assert 'path = "/var/lib/phermes/seed/linux.iso"' in content
+    assert 'format = "raw"' in content
+    assert 'interface = "cdrom"' in content
+    # OS disk still virtio-scsi
+    assert 'interface = "virtio-scsi"' in content
