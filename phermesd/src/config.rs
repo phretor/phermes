@@ -17,6 +17,7 @@ pub enum DiskInterface {
     #[default]
     VirtioScsi,
     VirtioBlk,
+    Cdrom,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,5 +306,26 @@ vnc = true
         let vms = load_dir(dir.path()).unwrap();
         let ids: Vec<&str> = vms.iter().map(|v| v.id.as_str()).collect();
         assert_eq!(ids, vec!["linux", "windows"]);
+    }
+
+    #[test]
+    fn disk_interface_cdrom_parses_from_toml() {
+        let toml_text = r#"
+flavor = "linux"
+[resources]
+memory_mib = 1024
+vcpus = 1
+[firmware]
+ovmf_code = "/a"
+ovmf_vars_template = "/b"
+[[disk]]
+path = "/var/lib/phermes/seed/linux.iso"
+format = "raw"
+interface = "cdrom"
+[[net]]
+bridge = "vmbr0"
+"#;
+        let def: VmDef = toml::from_str(toml_text).unwrap();
+        assert_eq!(def.disk[0].interface, DiskInterface::Cdrom);
     }
 }

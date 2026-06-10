@@ -222,7 +222,7 @@ def test_import_vm_linux_routes_into_provision_linux_disk(monkeypatch):
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
 
-    def fake_provision(source=None):
+    def fake_provision(source=None, seed_iso_path=None):
         seen["source"] = source
 
     monkeypatch.setattr(cli_mod, "_provision_linux_vm", fake_provision)
@@ -260,3 +260,124 @@ def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
         ["/dev/loop0", "--import-vm", "windows=/tmp/w.qcow2", "--dev-credentials"],
     )
     assert result.exit_code != 0
+
+
+# ── C7 tests: _write_cloud_init_seed + build() threading ────────────────────
+
+
+def test_no_seed_when_dev_credentials_absent(monkeypatch):
+    """Production-style build: no --dev-credentials -> no cloud-init seed."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+    def fake_no_seed(key):
+        seen["called_with"] = key
+
+    monkeypatch.setattr(cli_mod, "_write_cloud_init_seed", fake_no_seed)
+    for helper in ("_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+                   "_install_minimal_host", "_configure_host", "_setup_credentials",
+                   "_write_firstboot", "_provision_linux_vm", "_partition"):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    result = runner.invoke(cli_mod.app, [
+        "/dev/loop0", "--import-vm", "linux=/tmp/x.qcow2", "--luks-passphrase", "test-pass",
+    ])
+    assert result.exit_code == 0, result.stdout
+    # Helper called with None (no key => no seed)
+    assert seen.get("called_with") is None
+
+
+def test_seed_written_when_dev_credentials_and_key_set(monkeypatch):
+    """Dev build: --dev-credentials + --dev-ssh-pubkey -> seed generated."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+
+    def fake_seed(key):
+        seen["called_with"] = key
+        return "/var/lib/phermes/seed/linux.iso"
+
+    monkeypatch.setattr(cli_mod, "_write_cloud_init_seed", fake_seed)
+
+    def fake_provision(source=None, seed_iso_path=None):
+        seen.update({"source": source, "seed": seed_iso_path})
+
+    monkeypatch.setattr(cli_mod, "_provision_linux_vm", fake_provision)
+    for helper in ("_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+                   "_install_minimal_host", "_configure_host", "_setup_credentials",
+                   "_write_firstboot", "_partition"):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    result = runner.invoke(cli_mod.app, [
+        "/dev/loop0",
+        "--dev-credentials",
+        "--dev-ssh-pubkey", "ssh-ed25519 AAAA...op@host",
+        "--import-vm", "linux=/tmp/x.qcow2",
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert seen.get("called_with") == "ssh-ed25519 AAAA...op@host"
+    assert seen.get("seed") == "/var/lib/phermes/seed/linux.iso"
+
+
+def test_no_seed_when_no_vm(monkeypatch):
+    """--no-vm: even with --dev-credentials, no seed is written (no VM to seed)."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+
+    def fake_seed(key):
+        seen["seed_called"] = True
+        return None
+
+    monkeypatch.setattr(cli_mod, "_write_cloud_init_seed", fake_seed)
+    monkeypatch.setattr(cli_mod, "_provision_linux_vm",
+                        lambda *a, **k: seen.setdefault("provision_called", True))
+    for helper in ("_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+                   "_install_minimal_host", "_configure_host", "_setup_credentials",
+                   "_write_firstboot", "_partition"):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    result = runner.invoke(cli_mod.app, [
+        "/dev/loop0",
+        "--dev-credentials",
+        "--dev-ssh-pubkey", "ssh-ed25519 AAAA...op@host",
+        "--no-vm",
+    ])
+    assert result.exit_code == 0, result.stdout
+    # Provisioning was skipped, so the seed helper was never invoked.
+    assert "seed_called" not in seen
+    assert "provision_called" not in seen
+
+
+def test_write_cloud_init_seed_returns_none_when_no_key():
+    from phermes_build import cli as cli_mod
+
+    assert cli_mod._write_cloud_init_seed(None) is None
+
+
+def test_write_cloud_init_seed_calls_cloud_init_when_key_present(monkeypatch, tmp_path):
+    """_write_cloud_init_seed shells the work to cloud_init.write_seed_iso and
+    returns LINUX_SEED_PATH (the guest path, NOT the chroot path)."""
+    from phermes_build import cli as cli_mod
+    from phermes_build import cloud_init as ci_mod_local
+    from phermes_build import vm as vm_mod_local
+
+    captured: dict = {}
+
+    def fake_write_seed_iso(out_path: str, cfg) -> None:
+        captured["out"] = out_path
+        captured["keys"] = cfg.ssh_authorized_keys
+
+    monkeypatch.setattr(ci_mod_local, "write_seed_iso", fake_write_seed_iso)
+    monkeypatch.setattr(cli_mod, "PVE_ROOT_MOUNT", str(tmp_path))
+
+    out = cli_mod._write_cloud_init_seed("ssh-ed25519 AAAA...op@host")
+    assert out == vm_mod_local.LINUX_SEED_PATH
+    assert captured["out"] == str(tmp_path / "var/lib/phermes/seed/linux.iso")
+    assert captured["keys"] == ["ssh-ed25519 AAAA...op@host"]

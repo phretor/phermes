@@ -20,8 +20,11 @@ DEFAULT_DISK_GB = 40
 DEFAULT_MEMORY_MIB = 4096
 DEFAULT_VCPUS = 4
 
+SEED_DIR = "/var/lib/phermes/seed"
+LINUX_SEED_PATH = f"{SEED_DIR}/linux.iso"
 
-def _linux_def_text(*, memory_mib: int, vcpus: int) -> str:
+
+def _linux_def_text(*, memory_mib: int, vcpus: int, seed_iso_path: str | None) -> str:
     """Render /etc/phermes/vms/linux.toml content.
 
     Production conventions:
@@ -29,8 +32,11 @@ def _linux_def_text(*, memory_mib: int, vcpus: int) -> str:
       * vmbr0 bridge (set up by host.write_network_interfaces)
       * virtio-scsi + virtio-net (perf + driver availability in Linux guests)
       * serial + vnc unix sockets exposed (slice #4's console proxy reads them)
+
+    When ``seed_iso_path`` is set, a second [[disk]] block is appended for the
+    cloud-init NoCloud CDROM. When None (production), no CDROM is emitted.
     """
-    return (
+    text = (
         f'flavor = "linux"\n'
         f"[resources]\n"
         f"memory_mib = {memory_mib}\n"
@@ -43,13 +49,23 @@ def _linux_def_text(*, memory_mib: int, vcpus: int) -> str:
         f'path = "/dev/{STORAGE_VG}/vm-{LINUX_VMID}-disk-0"\n'
         f'format = "raw"\n'
         f'interface = "virtio-scsi"\n'
-        f"[[net]]\n"
-        f'bridge = "vmbr0"\n'
-        f'model = "virtio-net"\n'
-        f"[console]\n"
-        f"serial = true\n"
-        f"vnc = true\n"
     )
+    if seed_iso_path is not None:
+        text += (
+            f"[[disk]]\n"
+            f'path = "{seed_iso_path}"\n'
+            f'format = "raw"\n'
+            f'interface = "cdrom"\n'
+        )
+    text += (
+        "[[net]]\n"
+        'bridge = "vmbr0"\n'
+        'model = "virtio-net"\n'
+        "[console]\n"
+        "serial = true\n"
+        "vnc = true\n"
+    )
+    return text
 
 
 def write_linux_def(
@@ -57,13 +73,21 @@ def write_linux_def(
     *,
     memory_mib: int = DEFAULT_MEMORY_MIB,
     vcpus: int = DEFAULT_VCPUS,
+    seed_iso_path: str | None = None,
 ) -> None:
-    """Write /etc/phermes/vms/linux.toml inside the chroot."""
+    """Write /etc/phermes/vms/linux.toml inside the chroot.
+
+    If ``seed_iso_path`` is set, the def references it as a CDROM [[disk]].
+    """
     vms_dir = os.path.join(chroot_mount, "etc/phermes/vms")
     os.makedirs(vms_dir, exist_ok=True)
     def_path = os.path.join(vms_dir, "linux.toml")
     with open(def_path, "w") as f:
-        f.write(_linux_def_text(memory_mib=memory_mib, vcpus=vcpus))
+        f.write(_linux_def_text(
+            memory_mib=memory_mib,
+            vcpus=vcpus,
+            seed_iso_path=seed_iso_path,
+        ))
 
 
 def provision_linux_disk(

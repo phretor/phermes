@@ -91,15 +91,30 @@ fn build_linux(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
 
     let mut scsi_controller_added = false;
     for (i, disk) in d.disk.iter().enumerate() {
-        pair(
-            &mut a,
-            "-drive",
-            format!(
-                "file={},format={},if=none,id=disk{i}",
-                disk.path.display(),
-                disk.format
-            ),
-        );
+        match disk.interface {
+            DiskInterface::VirtioScsi | DiskInterface::VirtioBlk => {
+                pair(
+                    &mut a,
+                    "-drive",
+                    format!(
+                        "file={},format={},if=none,id=disk{i}",
+                        disk.path.display(),
+                        disk.format
+                    ),
+                );
+            }
+            DiskInterface::Cdrom => {
+                pair(
+                    &mut a,
+                    "-drive",
+                    format!(
+                        "media=cdrom,readonly=on,format={},file={},if=none,id=disk{i}",
+                        disk.format,
+                        disk.path.display(),
+                    ),
+                );
+            }
+        }
         match disk.interface {
             DiskInterface::VirtioScsi => {
                 if !scsi_controller_added {
@@ -110,6 +125,9 @@ fn build_linux(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
             }
             DiskInterface::VirtioBlk => {
                 pair(&mut a, "-device", format!("virtio-blk-pci,drive=disk{i}"));
+            }
+            DiskInterface::Cdrom => {
+                pair(&mut a, "-device", format!("ide-cd,drive=disk{i}"));
             }
         }
     }
@@ -309,5 +327,24 @@ mod tests {
             == "socket,path=/run/phermesd/linux/qga.sock,server=on,wait=off,id=qga0"));
         assert!(argv.iter().any(|a| a
             == "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"));
+    }
+
+    #[test]
+    fn linux_argv_with_cdrom_disk_emits_media_cdrom_and_ide_cd() {
+        let mut vm = sample_vm();
+        // Append a second disk: the cloud-init seed CDROM.
+        vm.def.disk.push(Disk {
+            path: "/var/lib/phermes/seed/linux.iso".into(),
+            format: "raw".into(),
+            interface: DiskInterface::Cdrom,
+        });
+        let argv = build_argv(&vm, &rt()).unwrap();
+        // The seed appears as disk1 (the OS disk in sample_vm is disk0).
+        assert!(argv.iter().any(|a| a == "media=cdrom,readonly=on,format=raw,file=/var/lib/phermes/seed/linux.iso,if=none,id=disk1"));
+        assert!(argv.iter().any(|a| a == "ide-cd,drive=disk1"));
+        // The seed CDROM does NOT add a virtio-scsi controller for itself
+        // (only the existing virtio-scsi OS disk does).
+        let scsi_controllers = argv.iter().filter(|a| a.as_str() == "virtio-scsi-pci,id=scsi0").count();
+        assert_eq!(scsi_controllers, 1);
     }
 }

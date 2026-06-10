@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `phermes-build` cloud-init NoCloud seed (slice #4a): when run with
+  `--dev-credentials --dev-ssh-pubkey <key>`, a `seed.iso` (label CIDATA) is
+  generated and attached to the Linux guest as a CDROM. The seed contains a
+  `dev` user with the operator's SSH key (key-only login, locked password),
+  DHCP, and a `uv` installer in vendor-data. Slice #1's `DiskInterface` gains
+  a `Cdrom` variant; `qemu.rs` emits `-drive media=cdrom,readonly=on,…` +
+  `-device ide-cd,…`. Production builds ship no seed.
 - `phermes-build` host image migration (slice #6 MVP): the assembled appliance now boots a
   **minimal Debian host running phermesd** instead of Proxmox VE. The boot chain is
   `EFI → GRUB → Debian → systemd → phermesd → KVM Linux guest`. Management is `phermesctl`
