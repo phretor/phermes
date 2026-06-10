@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dosfstools \
     exfatprogs \
     fdisk \
+    genisoimage \
     lvm2 \
     udev \
     util-linux \
