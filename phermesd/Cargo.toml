@@ -11,7 +11,7 @@ path = "src/bin/phermesd.rs"
 
 [[bin]]
 name = "phermesctl"
-path = "src/bin/phermesctl.rs"
+path = "src/bin/phermesctl/main.rs"
 
 [lib]
 path = "src/lib.rs"
