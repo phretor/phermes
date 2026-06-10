@@ -7,6 +7,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from phermes_build import (
     btrfs,
+    cloud_init,
     exfat,
     host_config,
     luks,
@@ -119,10 +120,14 @@ def build(
         ("Writing first-boot flag", lambda: _write_firstboot()),
     ]
     if not no_vm:
+        seed = _write_cloud_init_seed(dev_ssh_pubkey if dev_credentials else None)
         os_steps.append(
             (
                 "Provisioning Linux VM",
-                lambda: _provision_linux_vm(source=linux_source),
+                lambda: _provision_linux_vm(
+                    source=linux_source,
+                    seed_iso_path=seed,
+                ),
             )
         )
 
@@ -290,8 +295,22 @@ def _configure_host(layout, cfg: BuildConfig) -> None:
     write_motd(PVE_ROOT_MOUNT, hostname="phermes", ip_hint="<your-ip>")
 
 
-def _provision_linux_vm(source: str | None) -> None:
-    vm_mod.write_linux_def(PVE_ROOT_MOUNT)
+def _write_cloud_init_seed(dev_ssh_pubkey: str | None) -> str | None:
+    """Generate /var/lib/phermes/seed/linux.iso in the chroot.
+
+    Returns the on-guest path (NOT the chroot path) for use in linux.toml, or
+    None when no seed should ship (production builds or no key supplied).
+    """
+    if not dev_ssh_pubkey:
+        return None
+    cfg = cloud_init.SeedConfig(ssh_authorized_keys=[dev_ssh_pubkey])
+    chroot_path = os.path.join(PVE_ROOT_MOUNT, vm_mod.LINUX_SEED_PATH.lstrip("/"))
+    cloud_init.write_seed_iso(chroot_path, cfg)
+    return vm_mod.LINUX_SEED_PATH
+
+
+def _provision_linux_vm(source: str | None, seed_iso_path: str | None) -> None:
+    vm_mod.write_linux_def(PVE_ROOT_MOUNT, seed_iso_path=seed_iso_path)
     vm_mod.provision_linux_disk(source=source)
 
 
