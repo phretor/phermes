@@ -1,7 +1,7 @@
 //! phermesctl: a thin UDS client for phermesd.
 
 mod console;
-pub use console::{find_escape, ConsoleError, ESCAPE_BYTE};
+pub use console::{find_escape, ConsoleError, RawTtyGuard, ESCAPE_BYTE};
 
 use clap::{Parser, Subcommand};
 use phermesd::proto::{encode_line, Request, Response};
