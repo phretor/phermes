@@ -27,7 +27,7 @@ qapi = { version = "0.15.0", features = ["async-tokio-all", "qmp", "qga"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util", "io-std"] }
 toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

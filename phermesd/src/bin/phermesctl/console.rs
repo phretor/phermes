@@ -166,6 +166,92 @@ where
     }
 }
 
+use phermesd::proto::{encode_line, Request, Response, VmInfo};
+use std::io::Write as _;
+use std::os::fd::AsFd;
+use std::path::Path;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::UnixStream;
+
+/// Top-level entry for `phermesctl console <id>`.
+///
+/// 1. Sends `Request::Status` over the existing UDS to discover the serial.sock path.
+/// 2. Connects to that Unix socket directly.
+/// 3. Enters raw mode on stdin.
+/// 4. Races `run_pump` against SIGINT and SIGTERM.
+/// 5. Restores the terminal (RAII), prints a one-word status to stderr, returns.
+///
+/// # Errors
+/// Returns `ConsoleError` for protocol, connect, and tty failures. Successful
+/// exits (Detached, Disconnected, signal) return `Ok(())`.
+pub async fn run_console(id: &str, control_sock: &Path) -> Result<(), ConsoleError> {
+    // 1. Status round-trip on the control socket
+    let stream = UnixStream::connect(control_sock).await.map_err(|e| ConsoleError::Connect {
+        path: control_sock.to_path_buf(),
+        source: e,
+    })?;
+    let (read, mut write) = stream.into_split();
+    let req = Request::Status { id: Some(id.to_string()) };
+    let line = encode_line(&req).map_err(|e| ConsoleError::Control(e.to_string()))?;
+    tokio::io::AsyncWriteExt::write_all(&mut write, line.as_bytes())
+        .await
+        .map_err(|e| ConsoleError::Control(format!("write: {e}")))?;
+    let mut lines = BufReader::new(read).lines();
+    let reply = lines
+        .next_line()
+        .await
+        .map_err(|e| ConsoleError::Control(format!("read: {e}")))?
+        .ok_or_else(|| ConsoleError::Control("daemon closed connection".into()))?;
+    let resp: Response = serde_json::from_str(&reply)
+        .map_err(|e| ConsoleError::Control(format!("decode: {e}")))?;
+    if !resp.ok {
+        let kind = resp.error.as_ref().map_or("unknown", |e| e.kind.as_str());
+        let msg = resp.error.as_ref().map_or("", |e| e.message.as_str());
+        return Err(ConsoleError::Control(format!("{kind}: {msg}")));
+    }
+    let data = resp
+        .data
+        .ok_or_else(|| ConsoleError::Control("Status response missing data".into()))?;
+    let info: VmInfo = serde_json::from_value(data)
+        .map_err(|e| ConsoleError::Control(format!("VmInfo: {e}")))?;
+    let serial = info.serial.ok_or_else(|| ConsoleError::NotActive(id.to_string()))?;
+
+    // 2. Open the serial socket
+    let serial_stream = UnixStream::connect(&serial).await.map_err(|e| ConsoleError::Connect {
+        path: serial.clone(),
+        source: e,
+    })?;
+    let (sock_r, sock_w) = serial_stream.into_split();
+
+    // 3. Raw mode on stdin
+    let stdin = std::io::stdin();
+    let _guard = RawTtyGuard::enter(stdin.as_fd())?;
+
+    // 4. Race pump against signals
+    let stdin_async = tokio::io::stdin();
+    let stdout_async = tokio::io::stdout();
+    let pump = run_pump(sock_r, sock_w, stdin_async, stdout_async);
+
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| ConsoleError::Tty(format!("install sigterm: {e}")))?;
+
+    let exit_msg = tokio::select! {
+        result = pump => {
+            match result? {
+                PumpExit::Detached => "Detached.",
+                PumpExit::Disconnected => "Disconnected.",
+            }
+        }
+        _ = tokio::signal::ctrl_c() => "Interrupted.",
+        _ = sigterm.recv() => "Terminated.",
+    };
+
+    // 5. RawTtyGuard drops here -> terminal restored.
+    // Write status to stderr so piping stdout is unaffected.
+    let _ = writeln!(std::io::stderr(), "{exit_msg}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
