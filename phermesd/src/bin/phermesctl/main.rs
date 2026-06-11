@@ -1,5 +1,8 @@
 //! phermesctl: a thin UDS client for phermesd.
 
+mod console;
+pub use console::{find_escape, run_console, run_pump, ConsoleError, ESCAPE_BYTE, PumpExit, RawTtyGuard};
+
 use clap::{Parser, Subcommand};
 use phermesd::proto::{encode_line, Request, Response};
 use std::io::Write;
@@ -46,17 +49,22 @@ enum Cmd {
     Rollback { vmid: u32, checkpoint: String },
     /// List checkpoints for a VM.
     Snapshots { vmid: u32 },
+    /// Attach to the active VM's serial console (raw, Ctrl-] to detach).
+    Console { id: String },
 }
 
 impl From<Cmd> for Request {
     fn from(c: Cmd) -> Self {
         match c {
-            Cmd::List => Request::List,
+            // Handled out-of-band by main() — this arm is never reached.
+            Cmd::List | Cmd::Console { .. } => Request::List,
             Cmd::Status { id } => Request::Status { id },
             Cmd::Activate { id } => Request::Activate { id },
             Cmd::Stop { id } => Request::Stop { id },
             Cmd::Reload => Request::Reload,
-            Cmd::Provision { vmid, from, size, force } => Request::Provision { vmid, from, size, force },
+            Cmd::Provision { vmid, from, size, force } => {
+                Request::Provision { vmid, from, size, force }
+            }
             Cmd::Delete { vmid } => Request::Delete { vmid },
             Cmd::Snapshot { vmid } => Request::Snapshot { vmid },
             Cmd::Rollback { vmid, checkpoint } => Request::Rollback { vmid, checkpoint },
@@ -68,6 +76,13 @@ impl From<Cmd> for Request {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // Console: out-of-band dispatch — uses the existing Status round-trip
+    // internally and opens the serial.sock directly.
+    if let Cmd::Console { id } = &args.cmd {
+        return console::run_console(id, &args.socket).await.map_err(anyhow::Error::from);
+    }
+
     let req: Request = args.cmd.into();
 
     let stream = UnixStream::connect(&args.socket).await?;
