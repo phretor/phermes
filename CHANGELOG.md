@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `phermesctl console <id>` (slice #4b): attaches to the guest's serial console
+  over `/run/phermesd/<id>/serial.sock` with raw-mode TTY and Ctrl-] detach.
+  Ctrl-C reaches the guest; the operator's terminal is restored on every exit
+  path (incl. panic). VNC is documented as `ssh -L 5900:.../vnc.sock <host>`
+  with no new daemon code. No new dependencies; `nix` gains the `term` feature
+  flag (which transitively enables `nix::pty` for the test).
 - `phermes-build` cloud-init NoCloud seed (slice #4a): when run with
   `--dev-credentials --dev-ssh-pubkey <key>`, a `seed.iso` (label CIDATA) is
   generated and attached to the Linux guest as a CDROM. The seed contains a
