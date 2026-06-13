@@ -120,3 +120,10 @@ def test_write_linux_def_emits_seed_cdrom_when_seed_iso_path_given(tmp_path):
     assert 'interface = "cdrom"' in content
     # OS disk still virtio-scsi
     assert 'interface = "virtio-scsi"' in content
+
+
+def test_windows_constants():
+    assert vm_mod.WINDOWS_VMID == 101
+    assert vm_mod.WINDOWS_DEFAULT_DISK_GB == 100
+    assert vm_mod.WINDOWS_DEFAULT_MEMORY_MIB == 8192
+    assert vm_mod.WINDOWS_DEFAULT_VCPUS == 4
