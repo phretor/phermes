@@ -17,7 +17,7 @@ pub struct RuntimePaths {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum QemuError {
-    #[error("flavor {0:?} is not yet supported (linux only)")]
+    #[error("flavor {0:?} is not yet supported")]
     UnsupportedFlavor(Flavor),
 }
 
@@ -25,11 +25,11 @@ pub enum QemuError {
 ///
 /// # Errors
 ///
-/// Returns `QemuError::UnsupportedFlavor` if the VM flavor is not `Linux`.
+/// Returns `QemuError::UnsupportedFlavor` if the VM flavor is not `Linux` or `Windows`.
 pub fn build_argv(vm: &Vm, rt: &RuntimePaths) -> Result<Vec<String>, QemuError> {
     match vm.def.flavor {
-        Flavor::Linux => Ok(build_linux(vm, rt)),
-        other => Err(QemuError::UnsupportedFlavor(other)),
+        Flavor::Linux | Flavor::Windows => Ok(build_pc_uefi(vm, rt)),
+        other @ Flavor::Macos => Err(QemuError::UnsupportedFlavor(other)),
     }
 }
 
@@ -46,7 +46,11 @@ fn pair(a: &mut Vec<String>, flag: &str, val: String) {
     a.push(val);
 }
 
-fn build_linux(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
+/// Build the argv vector for a generic q35+UEFI+virtio PC. Used for both
+/// Linux and Windows guests; their QEMU command lines are identical given
+/// the same firmware/disk/net/console settings (only the in-guest OS
+/// behavior differs). macOS uses a separate builder in slice #5b.
+fn build_pc_uefi(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
     let d = &vm.def;
     let mut a: Vec<String> = Vec::new();
 
@@ -300,13 +304,21 @@ mod tests {
     }
 
     #[test]
-    fn non_linux_flavor_is_unsupported() {
+    fn macos_flavor_is_unsupported() {
         let mut vm = sample_vm();
         vm.def.flavor = Flavor::Macos;
-        assert!(matches!(
-            build_argv(&vm, &rt()),
-            Err(QemuError::UnsupportedFlavor(Flavor::Macos))
-        ));
+        let result = build_argv(&vm, &rt());
+        assert!(matches!(result, Err(QemuError::UnsupportedFlavor(Flavor::Macos))));
+    }
+
+    #[test]
+    fn windows_argv_is_byte_identical_to_linux_argv_for_equivalent_def() {
+        let lx = sample_vm();
+        let mut win = sample_vm();
+        win.def.flavor = Flavor::Windows;
+        let argv_lx = build_argv(&lx, &rt()).unwrap();
+        let argv_win = build_argv(&win, &rt()).unwrap();
+        assert_eq!(argv_lx, argv_win);
     }
 
     #[test]

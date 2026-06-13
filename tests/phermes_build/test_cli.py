@@ -236,7 +236,7 @@ def test_import_vm_linux_routes_into_provision_linux_disk(monkeypatch):
 
 
 def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
-    """--import-vm windows=<path> is rejected (MVP supports only linux)."""
+    """--import-vm macos=<path> is rejected (slice #5a supports linux + windows)."""
     from phermes_build import cli as cli_mod
 
     for helper in (
@@ -257,7 +257,7 @@ def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
 
     result = runner.invoke(
         cli_mod.app,
-        ["/dev/loop0", "--import-vm", "windows=/tmp/w.qcow2", "--dev-credentials"],
+        ["/dev/loop0", "--import-vm", "macos=/tmp/m.qcow2", "--dev-credentials"],
     )
     assert result.exit_code != 0
 
@@ -381,3 +381,156 @@ def test_write_cloud_init_seed_calls_cloud_init_when_key_present(monkeypatch, tm
     assert out == vm_mod_local.LINUX_SEED_PATH
     assert captured["out"] == str(tmp_path / "var/lib/phermes/seed/linux.iso")
     assert captured["keys"] == ["ssh-ed25519 AAAA...op@host"]
+
+
+# ── W5: _vm_source generic flavor extraction ──────────────────────────────
+
+
+def test_vm_source_returns_linux_path():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["linux=/tmp/x.qcow2"], "linux") == "/tmp/x.qcow2"
+
+
+def test_vm_source_returns_windows_path():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["windows=/tmp/win.qcow2"], "windows") == "/tmp/win.qcow2"
+
+
+def test_vm_source_picks_correct_flavor_when_both_given():
+    from phermes_build import cli as cli_mod
+    args = ["linux=/a.qcow2", "windows=/b.qcow2"]
+    assert cli_mod._vm_source(args, "linux") == "/a.qcow2"
+    assert cli_mod._vm_source(args, "windows") == "/b.qcow2"
+
+
+def test_vm_source_returns_none_when_flavor_absent():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["linux=/a.qcow2"], "windows") is None
+
+
+def test_vm_source_rejects_unsupported_flavor():
+    import typer
+
+    from phermes_build import cli as cli_mod
+
+    with pytest.raises(typer.BadParameter):
+        cli_mod._vm_source(["macos=/m.qcow2"], "linux")
+
+
+# ── W6: Windows VM provisioning wired into build() ──────────────────────────
+
+
+def test_import_vm_windows_routes_into_provision_windows_vm(monkeypatch):
+    """--import-vm windows=<path> reaches _provision_windows_vm(source=<path>)."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition", "_provision_linux_vm",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    def fake_provision_windows(source=None):
+        seen["source"] = source
+
+    monkeypatch.setattr(cli_mod, "_provision_windows_vm", fake_provision_windows)
+
+    result = runner.invoke(
+        cli_mod.app,
+        ["/dev/loop0", "--import-vm", "windows=/tmp/win.qcow2", "--dev-credentials"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert seen.get("source") == "/tmp/win.qcow2"
+
+
+def test_import_vm_both_flavors_runs_both_provisioners(monkeypatch):
+    """--import-vm linux=A --import-vm windows=B provisions both VMs."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(
+        cli_mod, "_provision_linux_vm",
+        lambda source=None, seed_iso_path=None: seen.update(linux=source),
+    )
+    monkeypatch.setattr(
+        cli_mod, "_provision_windows_vm",
+        lambda source=None: seen.update(windows=source),
+    )
+
+    result = runner.invoke(
+        cli_mod.app,
+        [
+            "/dev/loop0",
+            "--import-vm", "linux=/tmp/lx.qcow2",
+            "--import-vm", "windows=/tmp/win.qcow2",
+            "--dev-credentials",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert seen.get("linux") == "/tmp/lx.qcow2"
+    assert seen.get("windows") == "/tmp/win.qcow2"
+
+
+def test_no_vm_skips_windows_provision_even_with_import(monkeypatch):
+    """--no-vm wins over --import-vm windows=<path>."""
+    from phermes_build import cli as cli_mod
+
+    seen: list[str] = []
+
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition", "_provision_linux_vm",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(
+        cli_mod, "_provision_windows_vm", lambda *a, **k: seen.append("windows")
+    )
+
+    result = runner.invoke(
+        cli_mod.app,
+        [
+            "/dev/loop0", "--no-vm",
+            "--import-vm", "windows=/tmp/win.qcow2",
+            "--dev-credentials",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "windows" not in seen
+
+
+def test_provision_windows_vm_calls_write_def_and_provision_disk(monkeypatch):
+    """_provision_windows_vm orchestrates vm.write_windows_def + provision_windows_disk."""
+    from phermes_build import cli as cli_mod
+    from phermes_build import vm as vm_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        vm_mod, "write_windows_def",
+        lambda mount, **kw: calls.append(f"write:{mount}"),
+    )
+    monkeypatch.setattr(
+        vm_mod, "provision_windows_disk",
+        lambda source=None: calls.append(f"disk:{source}"),
+    )
+
+    cli_mod._provision_windows_vm(source="/tmp/win.qcow2")
+
+    assert any(c.startswith("write:") for c in calls)
+    assert "disk:/tmp/win.qcow2" in calls

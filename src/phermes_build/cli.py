@@ -53,10 +53,12 @@ def build(
     ] = False,
     import_vm: Annotated[
         list[str] | None,
-        typer.Option(help="VM image to import: flavor=<path>, e.g. linux=/tmp/disk.qcow2"),
+        typer.Option(
+            help="VM image to import: flavor=<path> (linux=, windows=); may repeat."
+        ),
     ] = None,
     no_vm: Annotated[
-        bool, typer.Option("--no-vm", help="Skip Linux VM provisioning.")
+        bool, typer.Option("--no-vm", help="Skip all VM provisioning.")
     ] = False,
     skip_os_install: Annotated[
         bool, typer.Option(help="Run disk setup only; skip host install (for testing)")
@@ -96,7 +98,8 @@ def build(
     )
 
     # Validate --import-vm flavors early so we fail before touching the disk.
-    linux_source = _linux_source(import_vm or [])
+    linux_source = _vm_source(import_vm or [], "linux")
+    windows_source = _vm_source(import_vm or [], "windows")
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
@@ -130,6 +133,13 @@ def build(
                 ),
             )
         )
+        if windows_source is not None:
+            os_steps.append(
+                (
+                    "Provisioning Windows VM",
+                    lambda: _provision_windows_vm(source=windows_source),
+                )
+            )
 
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
@@ -191,18 +201,28 @@ def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None)
     raise SystemExit(1)
 
 
-def _linux_source(import_vm_args: list[str]) -> str | None:
-    """Parse --import-vm linux=<path> (MVP only supports linux=)."""
+_SUPPORTED_IMPORT_FLAVORS = ("linux", "windows")
+
+
+def _vm_source(import_vm_args: list[str], flavor: str) -> str | None:
+    """Extract the import path for ``flavor`` from --import-vm <flavor>=<path>.
+
+    Returns the path when matched, None otherwise. Any entry with an
+    unsupported flavor (anything outside ``_SUPPORTED_IMPORT_FLAVORS``) raises,
+    even if the requested ``flavor`` differs — operator typos shouldn't pass
+    silently.
+    """
+    match: str | None = None
     for entry in import_vm_args:
-        flavor, _, path = entry.partition("=")
-        if flavor == "linux" and path:
-            return path
-        if flavor and flavor != "linux":
+        entry_flavor, _, path = entry.partition("=")
+        if entry_flavor and entry_flavor not in _SUPPORTED_IMPORT_FLAVORS:
             raise typer.BadParameter(
-                f"--import-vm flavor '{flavor}' is not supported in the MVP "
-                f"(only 'linux=<path>')."
+                f"--import-vm flavor '{entry_flavor}' is not supported "
+                f"(supported: {', '.join(_SUPPORTED_IMPORT_FLAVORS)})."
             )
-    return None
+        if entry_flavor == flavor and path:
+            match = path
+    return match
 
 
 def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None) -> None:
@@ -312,6 +332,16 @@ def _write_cloud_init_seed(dev_ssh_pubkey: str | None) -> str | None:
 def _provision_linux_vm(source: str | None, seed_iso_path: str | None) -> None:
     vm_mod.write_linux_def(PVE_ROOT_MOUNT, seed_iso_path=seed_iso_path)
     vm_mod.provision_linux_disk(source=source)
+
+
+def _provision_windows_vm(source: str | None) -> None:
+    """BYOI: write windows.toml + create+populate the LVM-thin LV.
+
+    Only invoked when the operator supplied --import-vm windows=<path>.
+    No cloud-init seed — that's unattend.xml territory and a later slice.
+    """
+    vm_mod.write_windows_def(PVE_ROOT_MOUNT)
+    vm_mod.provision_windows_disk(source=source)
 
 
 def _write_firstboot() -> None:
