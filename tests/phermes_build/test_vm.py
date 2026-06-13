@@ -127,3 +127,39 @@ def test_windows_constants():
     assert vm_mod.WINDOWS_DEFAULT_DISK_GB == 100
     assert vm_mod.WINDOWS_DEFAULT_MEMORY_MIB == 8192
     assert vm_mod.WINDOWS_DEFAULT_VCPUS == 4
+
+
+def test_write_windows_def_emits_expected_toml(tmp_path):
+    import os as _os
+    chroot = str(tmp_path / "chroot")
+    _os.makedirs(chroot)
+    vm_mod.write_windows_def(chroot)
+
+    toml_path = tmp_path / "chroot" / "etc/phermes/vms/windows.toml"
+    assert toml_path.exists()
+    content = toml_path.read_text()
+    assert 'flavor = "windows"' in content
+    assert "memory_mib = 8192" in content
+    assert "vcpus = 4" in content
+    assert 'cpu = "host"' in content
+    assert 'ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"' in content
+    assert 'ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"' in content
+    assert 'path = "/dev/pve/vm-101-disk-0"' in content
+    assert 'format = "raw"' in content
+    assert 'interface = "virtio-scsi"' in content
+    assert 'bridge = "vmbr0"' in content
+    assert 'model = "virtio-net"' in content
+    assert "serial = true" in content
+    assert "vnc = true" in content
+    # Slice #5a: no cloud-init seed for Windows — windows.toml has exactly ONE [[disk]] block.
+    assert content.count("[[disk]]") == 1
+
+
+def test_write_windows_def_honors_override_resources(tmp_path):
+    import os as _os
+    chroot = str(tmp_path / "chroot")
+    _os.makedirs(chroot)
+    vm_mod.write_windows_def(chroot, memory_mib=16384, vcpus=8)
+    content = (tmp_path / "chroot" / "etc/phermes/vms/windows.toml").read_text()
+    assert "memory_mib = 16384" in content
+    assert "vcpus = 8" in content

@@ -95,6 +95,52 @@ def write_linux_def(
         ))
 
 
+def _windows_def_text(*, memory_mib: int, vcpus: int) -> str:
+    """Render /etc/phermes/vms/windows.toml content.
+
+    Slice #5a is BYOI: operator supplies a pre-installed Windows qcow2 (virtio
+    drivers already loaded). The def therefore has no cloud-init seed CDROM
+    block — that's unattend.xml territory and a later slice.
+
+    Operators whose images lack virtio drivers can hand-edit `interface = "sata"`
+    or `model = "e1000"` post-build.
+    """
+    return (
+        f'flavor = "windows"\n'
+        f"[resources]\n"
+        f"memory_mib = {memory_mib}\n"
+        f"vcpus = {vcpus}\n"
+        f'cpu = "host"\n'
+        f"[firmware]\n"
+        f'ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"\n'
+        f'ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"\n'
+        f"[[disk]]\n"
+        f'path = "/dev/{STORAGE_VG}/vm-{WINDOWS_VMID}-disk-0"\n'
+        f'format = "raw"\n'
+        f'interface = "virtio-scsi"\n'
+        f"[[net]]\n"
+        f'bridge = "vmbr0"\n'
+        f'model = "virtio-net"\n'
+        f"[console]\n"
+        f"serial = true\n"
+        f"vnc = true\n"
+    )
+
+
+def write_windows_def(
+    chroot_mount: str,
+    *,
+    memory_mib: int = WINDOWS_DEFAULT_MEMORY_MIB,
+    vcpus: int = WINDOWS_DEFAULT_VCPUS,
+) -> None:
+    """Write /etc/phermes/vms/windows.toml inside the chroot."""
+    vms_dir = os.path.join(chroot_mount, "etc/phermes/vms")
+    os.makedirs(vms_dir, exist_ok=True)
+    def_path = os.path.join(vms_dir, "windows.toml")
+    with open(def_path, "w") as f:
+        f.write(_windows_def_text(memory_mib=memory_mib, vcpus=vcpus))
+
+
 def provision_linux_disk(
     size_gb: int = DEFAULT_DISK_GB,
     source: str | None = None,
