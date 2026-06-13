@@ -96,7 +96,7 @@ def build(
     )
 
     # Validate --import-vm flavors early so we fail before touching the disk.
-    linux_source = _linux_source(import_vm or [])
+    linux_source = _vm_source(import_vm or [], "linux")
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
@@ -191,18 +191,28 @@ def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None)
     raise SystemExit(1)
 
 
-def _linux_source(import_vm_args: list[str]) -> str | None:
-    """Parse --import-vm linux=<path> (MVP only supports linux=)."""
+_SUPPORTED_IMPORT_FLAVORS = ("linux", "windows")
+
+
+def _vm_source(import_vm_args: list[str], flavor: str) -> str | None:
+    """Extract the import path for ``flavor`` from --import-vm <flavor>=<path>.
+
+    Returns the path when matched, None otherwise. Any entry with an
+    unsupported flavor (anything outside ``_SUPPORTED_IMPORT_FLAVORS``) raises,
+    even if the requested ``flavor`` differs — operator typos shouldn't pass
+    silently.
+    """
+    match: str | None = None
     for entry in import_vm_args:
-        flavor, _, path = entry.partition("=")
-        if flavor == "linux" and path:
-            return path
-        if flavor and flavor != "linux":
+        entry_flavor, _, path = entry.partition("=")
+        if entry_flavor and entry_flavor not in _SUPPORTED_IMPORT_FLAVORS:
             raise typer.BadParameter(
-                f"--import-vm flavor '{flavor}' is not supported in the MVP "
-                f"(only 'linux=<path>')."
+                f"--import-vm flavor '{entry_flavor}' is not supported "
+                f"(supported: {', '.join(_SUPPORTED_IMPORT_FLAVORS)})."
             )
-    return None
+        if entry_flavor == flavor and path:
+            match = path
+    return match
 
 
 def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None) -> None:

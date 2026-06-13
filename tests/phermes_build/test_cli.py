@@ -236,7 +236,7 @@ def test_import_vm_linux_routes_into_provision_linux_disk(monkeypatch):
 
 
 def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
-    """--import-vm windows=<path> is rejected (MVP supports only linux)."""
+    """--import-vm macos=<path> is rejected (slice #5a supports linux + windows)."""
     from phermes_build import cli as cli_mod
 
     for helper in (
@@ -257,7 +257,7 @@ def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
 
     result = runner.invoke(
         cli_mod.app,
-        ["/dev/loop0", "--import-vm", "windows=/tmp/w.qcow2", "--dev-credentials"],
+        ["/dev/loop0", "--import-vm", "macos=/tmp/m.qcow2", "--dev-credentials"],
     )
     assert result.exit_code != 0
 
@@ -381,3 +381,37 @@ def test_write_cloud_init_seed_calls_cloud_init_when_key_present(monkeypatch, tm
     assert out == vm_mod_local.LINUX_SEED_PATH
     assert captured["out"] == str(tmp_path / "var/lib/phermes/seed/linux.iso")
     assert captured["keys"] == ["ssh-ed25519 AAAA...op@host"]
+
+
+# ── W5: _vm_source generic flavor extraction ──────────────────────────────
+
+
+def test_vm_source_returns_linux_path():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["linux=/tmp/x.qcow2"], "linux") == "/tmp/x.qcow2"
+
+
+def test_vm_source_returns_windows_path():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["windows=/tmp/win.qcow2"], "windows") == "/tmp/win.qcow2"
+
+
+def test_vm_source_picks_correct_flavor_when_both_given():
+    from phermes_build import cli as cli_mod
+    args = ["linux=/a.qcow2", "windows=/b.qcow2"]
+    assert cli_mod._vm_source(args, "linux") == "/a.qcow2"
+    assert cli_mod._vm_source(args, "windows") == "/b.qcow2"
+
+
+def test_vm_source_returns_none_when_flavor_absent():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["linux=/a.qcow2"], "windows") is None
+
+
+def test_vm_source_rejects_unsupported_flavor():
+    import typer
+
+    from phermes_build import cli as cli_mod
+
+    with pytest.raises(typer.BadParameter):
+        cli_mod._vm_source(["macos=/m.qcow2"], "linux")
