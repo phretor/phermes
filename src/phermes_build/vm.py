@@ -166,3 +166,30 @@ def provision_linux_disk(
     run_cmd(["lvchange", "--addtag", OWNER_TAG, device])
     if source is not None:
         run_cmd(["qemu-img", "convert", "-O", "raw", source, device])
+
+
+def provision_windows_disk(
+    size_gb: int = WINDOWS_DEFAULT_DISK_GB,
+    source: str | None = None,
+) -> None:
+    """Create the Windows thin LV, tag it 'phermesd', optionally populate from a local image.
+
+    BYOI: ``source`` is typically a pre-installed Windows qcow2 with virtio
+    drivers already loaded. qemu-img handles qcow2/vmdk/raw inputs transparently.
+    """
+    disk_name = f"vm-{WINDOWS_VMID}-disk-0"
+    device = f"/dev/{STORAGE_VG}/{disk_name}"
+    run_cmd(
+        [
+            "lvcreate",
+            "--thin",
+            "--virtualsize",
+            f"{size_gb}G",
+            f"{STORAGE_VG}/{STORAGE_POOL}",
+            "-n",
+            disk_name,
+        ]
+    )
+    run_cmd(["lvchange", "--addtag", OWNER_TAG, device])
+    if source is not None:
+        run_cmd(["qemu-img", "convert", "-O", "raw", source, device])

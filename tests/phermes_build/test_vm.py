@@ -163,3 +163,37 @@ def test_write_windows_def_honors_override_resources(tmp_path):
     content = (tmp_path / "chroot" / "etc/phermes/vms/windows.toml").read_text()
     assert "memory_mib = 16384" in content
     assert "vcpus = 8" in content
+
+
+def test_provision_windows_disk_creates_thin_lv_and_tags_it(monkeypatch):
+    calls = _capture(monkeypatch)
+    vm_mod.provision_windows_disk()
+    assert calls[0][0] == "lvcreate"
+    assert "--thin" in calls[0]
+    assert "--virtualsize" in calls[0]
+    assert "100G" in calls[0]
+    assert "pve/data" in calls[0]
+    assert "vm-101-disk-0" in calls[0]
+    assert calls[1] == ["lvchange", "--addtag", "phermesd", "/dev/pve/vm-101-disk-0"]
+    assert not any(c[0] == "qemu-img" for c in calls)
+
+
+def test_provision_windows_disk_with_source_runs_qemu_img_convert(monkeypatch):
+    calls = _capture(monkeypatch)
+    vm_mod.provision_windows_disk(source="/tmp/windows.qcow2")
+    qemu_calls = [c for c in calls if c[0] == "qemu-img"]
+    assert len(qemu_calls) == 1
+    assert qemu_calls[0] == [
+        "qemu-img",
+        "convert",
+        "-O",
+        "raw",
+        "/tmp/windows.qcow2",
+        "/dev/pve/vm-101-disk-0",
+    ]
+
+
+def test_provision_windows_disk_custom_size(monkeypatch):
+    calls = _capture(monkeypatch)
+    vm_mod.provision_windows_disk(size_gb=200)
+    assert "200G" in calls[0]
