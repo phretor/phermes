@@ -53,10 +53,12 @@ def build(
     ] = False,
     import_vm: Annotated[
         list[str] | None,
-        typer.Option(help="VM image to import: flavor=<path>, e.g. linux=/tmp/disk.qcow2"),
+        typer.Option(
+            help="VM image to import: flavor=<path> (linux=, windows=); may repeat."
+        ),
     ] = None,
     no_vm: Annotated[
-        bool, typer.Option("--no-vm", help="Skip Linux VM provisioning.")
+        bool, typer.Option("--no-vm", help="Skip all VM provisioning.")
     ] = False,
     skip_os_install: Annotated[
         bool, typer.Option(help="Run disk setup only; skip host install (for testing)")
@@ -97,6 +99,7 @@ def build(
 
     # Validate --import-vm flavors early so we fail before touching the disk.
     linux_source = _vm_source(import_vm or [], "linux")
+    windows_source = _vm_source(import_vm or [], "windows")
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
@@ -130,6 +133,13 @@ def build(
                 ),
             )
         )
+        if windows_source is not None:
+            os_steps.append(
+                (
+                    "Provisioning Windows VM",
+                    lambda: _provision_windows_vm(source=windows_source),
+                )
+            )
 
     steps = disk_steps if skip_os_install else disk_steps + os_steps
 
@@ -322,6 +332,16 @@ def _write_cloud_init_seed(dev_ssh_pubkey: str | None) -> str | None:
 def _provision_linux_vm(source: str | None, seed_iso_path: str | None) -> None:
     vm_mod.write_linux_def(PVE_ROOT_MOUNT, seed_iso_path=seed_iso_path)
     vm_mod.provision_linux_disk(source=source)
+
+
+def _provision_windows_vm(source: str | None) -> None:
+    """BYOI: write windows.toml + create+populate the LVM-thin LV.
+
+    Only invoked when the operator supplied --import-vm windows=<path>.
+    No cloud-init seed — that's unattend.xml territory and a later slice.
+    """
+    vm_mod.write_windows_def(PVE_ROOT_MOUNT)
+    vm_mod.provision_windows_disk(source=source)
 
 
 def _write_firstboot() -> None:
