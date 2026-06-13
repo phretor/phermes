@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `phermes-build` Windows guest support (slice #5a, BYOI): `--import-vm
+  windows=<path>` provisions a Windows VM at install time alongside the Linux
+  guest. The operator supplies a pre-installed qcow2 (virtio drivers already
+  loaded); `phermes-build` creates a 100 GB LVM-thin LV tagged `phermesd` and
+  imports the image via `qemu-img convert`. Defaults: 8 GiB RAM, 4 vCPUs,
+  VMID=101, `virtio-scsi` storage, `virtio-net` on `vmbr0`, OVMF firmware. No
+  cloud-init seed — Windows unattend.xml is a later slice. `phermesd` accepts
+  `Flavor::Windows`: the existing `build_linux` argv builder is renamed
+  `build_pc_uefi` and dispatches both Linux and Windows (Macos still errors with
+  `UnsupportedFlavor`). `--no-vm` skips both flavors.
 - `phermesctl console <id>` (slice #4b): attaches to the guest's serial console
   over `/run/phermesd/<id>/serial.sock` with raw-mode TTY and Ctrl-] detach.
   Ctrl-C reaches the guest; the operator's terminal is restored on every exit
