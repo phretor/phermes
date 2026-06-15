@@ -226,6 +226,19 @@ just check            # lint + typecheck + unit tests (pre-commit gate)
 just docker-build     # build the phermes-build image
 ```
 
+### Dependency updates
+
+[Renovate](https://docs.renovatebot.com/) keeps `uv.lock`, `phermesd/Cargo.lock`, GitHub
+Actions, and Dockerfile base images current. It runs self-hosted via
+`.github/workflows/renovate.yml` (Mondays 04:00 UTC, or `workflow_dispatch`), configured by
+`renovate.json`. New releases wait a 7-day cooldown before a PR is opened; Python dev tooling,
+GitHub Actions, and lockfile maintenance automerge once CI is green, while Rust and runtime
+updates open PRs for review.
+
+The workflow needs a `RENOVATE_TOKEN` repository secret — a token with permission to open
+branches and pull requests (a classic PAT with `repo` + `workflow` scope, or a fine-grained
+token granting Contents, Pull requests, and Workflows write on this repo).
+
 ### Smoke testing on a virtual disk
 
 The build runs end-to-end against a sparse file attached as a loop device — no real
