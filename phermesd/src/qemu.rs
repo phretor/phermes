@@ -15,21 +15,31 @@ pub struct RuntimePaths {
     pub qga: PathBuf,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum QemuError {
     #[error("flavor {0:?} is not yet supported")]
     UnsupportedFlavor(Flavor),
+    #[error(
+        "apple OSK not available at {path} — write the 64-char hex string \
+         (mode 0400, root-owned) and retry. ({source})"
+    )]
+    MissingAppleOsk {
+        path: PathBuf,
+        #[source]
+        source: crate::secrets::SecretsError,
+    },
 }
 
 /// Build the `qemu-system-x86_64` argument vector (program name excluded).
 ///
 /// # Errors
 ///
-/// Returns `QemuError::UnsupportedFlavor` if the VM flavor is not `Linux` or `Windows`.
+/// Returns `QemuError::MissingAppleOsk` if the flavor is `Macos` and the OSK
+/// file at [`crate::secrets::APPLE_OSK_PATH`] is absent or malformed.
 pub fn build_argv(vm: &Vm, rt: &RuntimePaths) -> Result<Vec<String>, QemuError> {
     match vm.def.flavor {
         Flavor::Linux | Flavor::Windows => Ok(build_pc_uefi(vm, rt)),
-        other @ Flavor::Macos => Err(QemuError::UnsupportedFlavor(other)),
+        Flavor::Macos => build_macos_with_secrets(vm, rt),
     }
 }
 
@@ -37,6 +47,7 @@ fn net_device(model: NetModel) -> &'static str {
     match model {
         NetModel::VirtioNet => "virtio-net-pci",
         NetModel::E1000 => "e1000",
+        NetModel::Vmxnet3 => "vmxnet3",
     }
 }
 
@@ -44,6 +55,55 @@ fn net_device(model: NetModel) -> &'static str {
 fn pair(a: &mut Vec<String>, flag: &str, val: String) {
     a.push(flag.to_string());
     a.push(val);
+}
+
+/// Append disk devices for a PC-style virtio/SCSI/CDROM setup.
+fn push_pc_disks(a: &mut Vec<String>, vm: &Vm) {
+    let mut scsi_controller_added = false;
+    for (i, disk) in vm.def.disk.iter().enumerate() {
+        match disk.interface {
+            DiskInterface::VirtioScsi | DiskInterface::VirtioBlk | DiskInterface::Ahci => {
+                pair(
+                    a,
+                    "-drive",
+                    format!(
+                        "file={},format={},if=none,id=disk{i}",
+                        disk.path.display(),
+                        disk.format
+                    ),
+                );
+            }
+            DiskInterface::Cdrom => {
+                pair(
+                    a,
+                    "-drive",
+                    format!(
+                        "media=cdrom,readonly=on,format={},file={},if=none,id=disk{i}",
+                        disk.format,
+                        disk.path.display(),
+                    ),
+                );
+            }
+        }
+        match disk.interface {
+            DiskInterface::VirtioScsi => {
+                if !scsi_controller_added {
+                    pair(a, "-device", "virtio-scsi-pci,id=scsi0".to_string());
+                    scsi_controller_added = true;
+                }
+                pair(a, "-device", format!("scsi-hd,drive=disk{i}"));
+            }
+            DiskInterface::VirtioBlk => {
+                pair(a, "-device", format!("virtio-blk-pci,drive=disk{i}"));
+            }
+            DiskInterface::Cdrom => {
+                pair(a, "-device", format!("ide-cd,drive=disk{i}"));
+            }
+            DiskInterface::Ahci => {
+                pair(a, "-device", format!("ide-hd,drive=disk{i}"));
+            }
+        }
+    }
 }
 
 /// Build the argv vector for a generic q35+UEFI+virtio PC. Used for both
@@ -64,21 +124,10 @@ fn build_pc_uefi(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
     pair(
         &mut a,
         "-drive",
-        format!(
-            "if=pflash,format=raw,readonly=on,file={}",
-            d.firmware.ovmf_code.display()
-        ),
+        format!("if=pflash,format=raw,readonly=on,file={}", d.firmware.ovmf_code.display()),
     );
-    pair(
-        &mut a,
-        "-drive",
-        format!("if=pflash,format=raw,file={}", rt.vars.display()),
-    );
-    pair(
-        &mut a,
-        "-qmp",
-        format!("unix:{},server=on,wait=off", rt.qmp.display()),
-    );
+    pair(&mut a, "-drive", format!("if=pflash,format=raw,file={}", rt.vars.display()));
+    pair(&mut a, "-qmp", format!("unix:{},server=on,wait=off", rt.qmp.display()));
     pair(&mut a, "-pidfile", rt.pidfile.display().to_string());
 
     pair(&mut a, "-device", "virtio-serial-pci".to_string());
@@ -87,75 +136,113 @@ fn build_pc_uefi(vm: &Vm, rt: &RuntimePaths) -> Vec<String> {
         "-chardev",
         format!("socket,path={},server=on,wait=off,id=qga0", rt.qga.display()),
     );
-    pair(
-        &mut a,
-        "-device",
-        "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0".to_string(),
-    );
+    pair(&mut a, "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0".to_string());
 
-    let mut scsi_controller_added = false;
-    for (i, disk) in d.disk.iter().enumerate() {
-        match disk.interface {
-            DiskInterface::VirtioScsi | DiskInterface::VirtioBlk => {
-                pair(
-                    &mut a,
-                    "-drive",
-                    format!(
-                        "file={},format={},if=none,id=disk{i}",
-                        disk.path.display(),
-                        disk.format
-                    ),
-                );
-            }
-            DiskInterface::Cdrom => {
-                pair(
-                    &mut a,
-                    "-drive",
-                    format!(
-                        "media=cdrom,readonly=on,format={},file={},if=none,id=disk{i}",
-                        disk.format,
-                        disk.path.display(),
-                    ),
-                );
-            }
-        }
-        match disk.interface {
-            DiskInterface::VirtioScsi => {
-                if !scsi_controller_added {
-                    pair(&mut a, "-device", "virtio-scsi-pci,id=scsi0".to_string());
-                    scsi_controller_added = true;
-                }
-                pair(&mut a, "-device", format!("scsi-hd,drive=disk{i}"));
-            }
-            DiskInterface::VirtioBlk => {
-                pair(&mut a, "-device", format!("virtio-blk-pci,drive=disk{i}"));
-            }
-            DiskInterface::Cdrom => {
-                pair(&mut a, "-device", format!("ide-cd,drive=disk{i}"));
-            }
-        }
-    }
+    push_pc_disks(&mut a, vm);
 
     for (i, net) in d.net.iter().enumerate() {
         let mac = net.mac.clone().unwrap_or_else(|| derived_mac(&vm.id));
         pair(&mut a, "-netdev", format!("bridge,id=net{i},br={}", net.bridge));
-        pair(
-            &mut a,
-            "-device",
-            format!("{},netdev=net{i},mac={mac}", net_device(net.model)),
-        );
+        pair(&mut a, "-device", format!("{},netdev=net{i},mac={mac}", net_device(net.model)));
     }
 
     if d.console.serial {
-        pair(
-            &mut a,
-            "-serial",
-            format!("unix:{},server=on,wait=off", rt.serial.display()),
-        );
+        pair(&mut a, "-serial", format!("unix:{},server=on,wait=off", rt.serial.display()));
     }
     if d.console.vnc {
         pair(&mut a, "-vnc", format!("unix:{}", rt.vnc.display()));
     }
+
+    a
+}
+
+/// Seam: read OSK from the canonical secrets path and delegate to `build_macos`.
+fn build_macos_with_secrets(vm: &Vm, rt: &RuntimePaths) -> Result<Vec<String>, QemuError> {
+    let path = PathBuf::from(crate::secrets::APPLE_OSK_PATH);
+    let osk = crate::secrets::read_apple_osk(&path)
+        .map_err(|source| QemuError::MissingAppleOsk { path: path.clone(), source })?;
+    Ok(build_macos(vm, rt, &osk))
+}
+
+/// Append the AHCI disk section for macOS: one controller + one drive per disk.
+fn push_macos_disks(a: &mut Vec<String>, vm: &Vm) {
+    pair(a, "-device", "ich9-ahci,id=ahci0".to_string());
+    for (i, disk) in vm.def.disk.iter().enumerate() {
+        pair(
+            a,
+            "-drive",
+            format!(
+                "id=disk{i},if=none,format={},file={}",
+                disk.format,
+                disk.path.display()
+            ),
+        );
+        pair(a, "-device", format!("ide-hd,bus=ahci0.{i},drive=disk{i}"));
+    }
+}
+
+/// Build the argv vector for a macOS guest on q35 with AHCI storage and vmxnet3.
+///
+/// The caller supplies the Apple OSK string (already validated). This function
+/// is pure: it does not touch the filesystem or secrets store.
+fn build_macos(vm: &Vm, rt: &RuntimePaths, osk: &str) -> Vec<String> {
+    let d = &vm.def;
+    let mut a: Vec<String> = Vec::new();
+
+    a.push("-enable-kvm".to_string());
+    pair(&mut a, "-machine", "q35,accel=kvm,kernel-irqchip=split".to_string());
+    pair(
+        &mut a,
+        "-cpu",
+        "Penryn,kvm=on,vendor=GenuineIntel,+invtsc,+pcid,+ssse3,+sse4.2,\
+         +popcnt,+avx,+aes,+xsave,+xsaveopt,check"
+            .to_string(),
+    );
+    pair(
+        &mut a,
+        "-smp",
+        format!("cpus={},cores=2,threads=2,sockets=1", d.resources.vcpus),
+    );
+    pair(&mut a, "-m", d.resources.memory_mib.to_string());
+    a.push("-nodefaults".to_string());
+    a.push("-no-user-config".to_string());
+
+    pair(
+        &mut a,
+        "-drive",
+        format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            d.firmware.ovmf_code.display()
+        ),
+    );
+    pair(&mut a, "-drive", format!("if=pflash,format=raw,file={}", rt.vars.display()));
+
+    pair(&mut a, "-device", format!("isa-applesmc,osk={osk}"));
+    push_macos_disks(&mut a, vm);
+
+    for (i, net) in d.net.iter().enumerate() {
+        let mac = net.mac.clone().unwrap_or_else(|| derived_mac(&vm.id));
+        pair(&mut a, "-netdev", format!("bridge,id=net{i},br={}", net.bridge));
+        pair(&mut a, "-device", format!("vmxnet3,netdev=net{i},mac={mac}"));
+    }
+
+    pair(&mut a, "-device", "nec-usb-xhci,id=xhci".to_string());
+    pair(&mut a, "-device", "usb-tablet,bus=xhci.0".to_string());
+
+    if d.console.serial {
+        pair(
+            &mut a,
+            "-chardev",
+            format!("socket,path={},server=on,wait=off,id=serial0", rt.serial.display()),
+        );
+        pair(&mut a, "-serial", "chardev:serial0".to_string());
+    }
+    if d.console.vnc {
+        pair(&mut a, "-vnc", format!("unix:{}", rt.vnc.display()));
+    }
+
+    pair(&mut a, "-qmp", format!("unix:{},server=on,wait=off", rt.qmp.display()));
+    pair(&mut a, "-pidfile", rt.pidfile.display().to_string());
 
     a
 }
@@ -303,12 +390,103 @@ mod tests {
         assert!(!argv.iter().any(|a| a == "-vnc"));
     }
 
+    // ── macOS-specific tests ──────────────────────────────────────────────────
+
+    const TEST_OSK: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn macos_vm() -> Vm {
+        Vm {
+            id: "macos".to_string(),
+            def: VmDef {
+                flavor: Flavor::Macos,
+                resources: Resources {
+                    memory_mib: 4096,
+                    vcpus: 4,
+                    cpu: "Penryn".into(),
+                },
+                firmware: Firmware {
+                    ovmf_code: "/usr/share/OVMF/OVMF_CODE.fd".into(),
+                    ovmf_vars_template: "/usr/share/OVMF/OVMF_VARS.fd".into(),
+                },
+                disk: vec![Disk {
+                    path: "/var/lib/phermes/images/macos.qcow2".into(),
+                    format: "qcow2".into(),
+                    interface: DiskInterface::Ahci,
+                }],
+                net: vec![Net {
+                    bridge: "vmbr0".into(),
+                    model: NetModel::Vmxnet3,
+                    mac: None,
+                }],
+                console: Console {
+                    serial: true,
+                    vnc: true,
+                },
+            },
+        }
+    }
+
     #[test]
-    fn macos_flavor_is_unsupported() {
-        let mut vm = sample_vm();
-        vm.def.flavor = Flavor::Macos;
+    fn macos_flavor_succeeds_when_apple_osk_present_in_argv() {
+        let vm = macos_vm();
+        let rt = rt();
+        let argv = build_macos(&vm, &rt, TEST_OSK);
+        assert!(argv.iter().any(|a| a.contains(&format!("isa-applesmc,osk={TEST_OSK}"))));
+    }
+
+    #[test]
+    fn macos_argv_includes_penryn_cpu_with_full_flag_set() {
+        let vm = macos_vm();
+        let argv = build_macos(&vm, &rt(), TEST_OSK);
+        let cpu_idx = argv.iter().position(|a| a == "-cpu").expect("-cpu present");
+        let cpu_val = &argv[cpu_idx + 1];
+        assert!(cpu_val.starts_with("Penryn,"), "got: {cpu_val}");
+        for flag in [
+            "kvm=on", "vendor=GenuineIntel", "+invtsc", "+pcid", "+ssse3",
+            "+sse4.2", "+popcnt", "+avx", "+aes", "+xsave", "+xsaveopt", "check",
+        ] {
+            assert!(cpu_val.contains(flag), "missing {flag} in {cpu_val}");
+        }
+    }
+
+    #[test]
+    fn macos_argv_uses_ahci_not_virtio_scsi() {
+        let vm = macos_vm();
+        let argv = build_macos(&vm, &rt(), TEST_OSK);
+        let joined = argv.join(" ");
+        assert!(joined.contains("ich9-ahci"), "no ahci controller: {joined}");
+        assert!(joined.contains("ide-hd"), "no ide-hd disk: {joined}");
+        assert!(!joined.contains("virtio-scsi"), "virtio-scsi present: {joined}");
+    }
+
+    #[test]
+    fn macos_argv_uses_vmxnet3() {
+        let vm = macos_vm();
+        let argv = build_macos(&vm, &rt(), TEST_OSK);
+        let joined = argv.join(" ");
+        assert!(joined.contains("vmxnet3"), "no vmxnet3: {joined}");
+        assert!(!joined.contains("virtio-net"), "virtio-net present: {joined}");
+    }
+
+    #[test]
+    fn macos_argv_byte_identical_for_equivalent_def_modulo_osk() {
+        let vm = macos_vm();
+        let a = build_macos(&vm, &rt(), TEST_OSK);
+        let b = build_macos(&vm, &rt(), TEST_OSK);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn build_argv_macos_returns_missing_apple_osk_when_file_absent() {
+        // APPLE_OSK_PATH (/etc/phermes/secrets/apple.osk) is not present in CI or
+        // on developer machines without the secrets bundle, so dispatch must fail.
+        // If this test runs on a machine that actually has the file, it will
+        // return Ok and the assert will panic — that is the correct behaviour
+        // (the file should not exist outside production).
+        let vm = macos_vm();
         let result = build_argv(&vm, &rt());
-        assert!(matches!(result, Err(QemuError::UnsupportedFlavor(Flavor::Macos))));
+        assert!(matches!(result, Err(QemuError::MissingAppleOsk { .. })));
     }
 
     #[test]

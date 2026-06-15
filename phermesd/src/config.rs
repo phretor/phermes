@@ -18,6 +18,7 @@ pub enum DiskInterface {
     VirtioScsi,
     VirtioBlk,
     Cdrom,
+    Ahci,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +27,7 @@ pub enum NetModel {
     #[default]
     VirtioNet,
     E1000,
+    Vmxnet3,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
