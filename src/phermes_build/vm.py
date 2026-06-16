@@ -25,6 +25,11 @@ WINDOWS_DEFAULT_DISK_GB = 100
 WINDOWS_DEFAULT_MEMORY_MIB = 8192
 WINDOWS_DEFAULT_VCPUS = 4
 
+MACOS_VMID = 100
+MACOS_DEFAULT_DISK_GB = 120
+MACOS_DEFAULT_MEMORY_MIB = 12288
+MACOS_DEFAULT_VCPUS = 4
+
 SEED_DIR = "/var/lib/phermes/seed"
 LINUX_SEED_PATH = f"{SEED_DIR}/linux.iso"
 
@@ -141,6 +146,49 @@ def write_windows_def(
         f.write(_windows_def_text(memory_mib=memory_mib, vcpus=vcpus))
 
 
+def _macos_def_text(*, memory_mib: int, vcpus: int) -> str:
+    """Render /etc/phermes/vms/macos.toml content.
+
+    Slice #5b is BYOI: operator supplies an OpenCore-EFI + macOS qcow2 plus the
+    Apple OSK as a runtime secret at /etc/phermes/secrets/apple.osk. The def
+    omits the OSK — phermesd reads it at launch via secrets::read_apple_osk.
+    """
+    return (
+        f'flavor = "macos"\n'
+        f"[resources]\n"
+        f"memory_mib = {memory_mib}\n"
+        f"vcpus = {vcpus}\n"
+        f'cpu = "Penryn"\n'
+        f"[firmware]\n"
+        f'ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"\n'
+        f'ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"\n'
+        f"[[disk]]\n"
+        f'path = "/dev/{STORAGE_VG}/vm-{MACOS_VMID}-disk-0"\n'
+        f'format = "raw"\n'
+        f'interface = "ahci"\n'
+        f"[[net]]\n"
+        f'bridge = "vmbr0"\n'
+        f'model = "vmxnet3"\n'
+        f"[console]\n"
+        f"serial = true\n"
+        f"vnc = true\n"
+    )
+
+
+def write_macos_def(
+    chroot_mount: str,
+    *,
+    memory_mib: int = MACOS_DEFAULT_MEMORY_MIB,
+    vcpus: int = MACOS_DEFAULT_VCPUS,
+) -> None:
+    """Write /etc/phermes/vms/macos.toml inside the chroot."""
+    vms_dir = os.path.join(chroot_mount, "etc/phermes/vms")
+    os.makedirs(vms_dir, exist_ok=True)
+    def_path = os.path.join(vms_dir, "macos.toml")
+    with open(def_path, "w") as f:
+        f.write(_macos_def_text(memory_mib=memory_mib, vcpus=vcpus))
+
+
 def provision_linux_disk(
     size_gb: int = DEFAULT_DISK_GB,
     source: str | None = None,
@@ -190,6 +238,26 @@ def provision_windows_disk(
             disk_name,
         ]
     )
+    run_cmd(["lvchange", "--addtag", OWNER_TAG, device])
+    if source is not None:
+        run_cmd(["qemu-img", "convert", "-O", "raw", source, device])
+
+
+def provision_macos_disk(
+    size_gb: int = MACOS_DEFAULT_DISK_GB,
+    source: str | None = None,
+) -> None:
+    """Create the macOS thin LV, tag it 'phermesd', optionally populate from a local image.
+
+    BYOI: ``source`` is an operator-supplied qcow2 with OpenCore EFI baked in.
+    qemu-img handles qcow2/vmdk/raw inputs transparently.
+    """
+    disk_name = f"vm-{MACOS_VMID}-disk-0"
+    device = f"/dev/{STORAGE_VG}/{disk_name}"
+    run_cmd([
+        "lvcreate", "--thin", "--virtualsize", f"{size_gb}G",
+        f"{STORAGE_VG}/{STORAGE_POOL}", "-n", disk_name,
+    ])
     run_cmd(["lvchange", "--addtag", OWNER_TAG, device])
     if source is not None:
         run_cmd(["qemu-img", "convert", "-O", "raw", source, device])
