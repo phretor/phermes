@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `phermes-build` macOS guest support (slice #5b, BYOI): `--import-vm
+  macos=<path>` provisions a macOS VM at install time. The operator supplies a
+  qcow2 with OpenCore EFI + macOS baked in. Defaults: 12 GiB RAM, 4 vCPUs
+  (2 cores × 2 threads), VMID=100, AHCI storage, vmxnet3 net, OVMF firmware,
+  Penryn CPU with the Hackintosh flag set. The Apple OSK is **not** shipped in
+  the install image: production builds expect the operator to drop the 64-char
+  hex string into `/etc/phermes/secrets/apple.osk` (mode 0400) post-install;
+  `--dev-credentials --dev-apple-osk <osk>` pre-seeds it for dev builds.
+  `phermesd` adds `secrets.rs` (typed OSK reader with mode/format validation)
+  and `build_macos` argv in `qemu.rs`; the dispatch is now fully explicit
+  (no wildcard arm). `DiskInterface` gains `Ahci`; `NetModel` gains `Vmxnet3`.
+  The whole pipeline ships no Apple binaries or OpenCore images.
 - `phermes-build` Windows guest support (slice #5a, BYOI): `--import-vm
   windows=<path>` provisions a Windows VM at install time alongside the Linux
   guest. The operator supplies a pre-installed qcow2 (virtio drivers already
