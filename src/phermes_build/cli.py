@@ -112,6 +112,7 @@ def build(
     # Validate --import-vm flavors early so we fail before touching the disk.
     linux_source = _vm_source(import_vm or [], "linux")
     windows_source = _vm_source(import_vm or [], "windows")
+    macos_source = _vm_source(import_vm or [], "macos")
 
     layout = compute_layout(disk, cfg.share_size_gb, cfg.share_encrypted)
 
@@ -158,6 +159,13 @@ def build(
                 (
                     "Provisioning Windows VM",
                     lambda: _provision_windows_vm(source=windows_source),
+                )
+            )
+        if macos_source is not None:
+            os_steps.append(
+                (
+                    "Provisioning macOS VM",
+                    lambda: _provision_macos_vm(source=macos_source),
                 )
             )
 
@@ -393,6 +401,17 @@ def _provision_windows_vm(source: str | None) -> None:
     """
     vm_mod.write_windows_def(PVE_ROOT_MOUNT)
     vm_mod.provision_windows_disk(source=source)
+
+
+def _provision_macos_vm(source: str | None) -> None:
+    """BYOI: write macos.toml + create+populate the LVM-thin LV.
+
+    Only invoked when the operator supplied --import-vm macos=<path>. No
+    cloud-init seed; the OSK lives at /etc/phermes/secrets/apple.osk and is
+    read by phermesd at launch.
+    """
+    vm_mod.write_macos_def(PVE_ROOT_MOUNT)
+    vm_mod.provision_macos_disk(source=source)
 
 
 def _write_firstboot() -> None:

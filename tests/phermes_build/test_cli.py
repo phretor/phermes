@@ -630,3 +630,79 @@ def test_ensure_secrets_dir_creates_dir_with_0700_mode(tmp_path):
     secrets_dir = tmp_path / "chroot" / "etc/phermes/secrets"
     assert secrets_dir.exists()
     assert (_os.stat(secrets_dir).st_mode & 0o777) == 0o700
+
+
+# ── M6: macOS VM provisioning wired into build() ───────────────────────────
+
+
+def test_import_vm_macos_routes_into_provision_macos_vm(monkeypatch):
+    """--import-vm macos=<path> reaches _provision_macos_vm(source=<path>)."""
+    from phermes_build import cli as cli_mod
+
+    seen: dict = {}
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition", "_provision_linux_vm",
+        "_provision_windows_vm", "_ensure_secrets_dir",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    def fake_provision_macos(source=None):
+        seen["source"] = source
+    monkeypatch.setattr(cli_mod, "_provision_macos_vm", fake_provision_macos)
+
+    result = runner.invoke(
+        cli_mod.app,
+        ["/dev/loop0", "--import-vm", "macos=/tmp/m.qcow2", "--dev-credentials"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert seen.get("source") == "/tmp/m.qcow2"
+
+
+def test_no_vm_skips_macos_provision_even_with_import(monkeypatch):
+    from phermes_build import cli as cli_mod
+
+    seen: list[str] = []
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition",
+        "_provision_linux_vm", "_provision_windows_vm", "_ensure_secrets_dir",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(
+        cli_mod, "_provision_macos_vm", lambda *a, **k: seen.append("macos")
+    )
+
+    result = runner.invoke(
+        cli_mod.app,
+        ["/dev/loop0", "--no-vm",
+         "--import-vm", "macos=/tmp/m.qcow2", "--dev-credentials"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "macos" not in seen
+
+
+def test_provision_macos_vm_calls_write_def_and_provision_disk(monkeypatch):
+    from phermes_build import cli as cli_mod
+    from phermes_build import vm as vm_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        vm_mod, "write_macos_def",
+        lambda mount, **kw: calls.append(f"write:{mount}"),
+    )
+    monkeypatch.setattr(
+        vm_mod, "provision_macos_disk",
+        lambda source=None: calls.append(f"disk:{source}"),
+    )
+
+    cli_mod._provision_macos_vm(source="/tmp/m.qcow2")
+
+    assert any(c.startswith("write:") for c in calls)
+    assert "disk:/tmp/m.qcow2" in calls
