@@ -61,50 +61,378 @@ controls.
 
 ## Getting started
 
-You need:
+A layered walkthrough — each step ends in a verification before the next begins. The
+end state is an SSD that boots a fully-encrypted PHermes appliance with both an Ubuntu
+Linux guest and a macOS guest available on demand.
+
+**Prerequisites:**
 
 - A **Linux builder** with Python 3.13+, [`uv`](https://docs.astral.sh/uv/), and the
   partitioning toolchain (`cryptsetup`, `lvm2`, `btrfs-progs`, `debootstrap`,
-  `dosfstools`, `exfatprogs`). On macOS or Windows, use [Via Docker](#via-docker-linux-host-only).
-- A **≥500 GB SSD or USB drive** to write the appliance onto (`phermes-build` WILL erase it).
-- An **x86-64 target machine** with KVM (Intel VT-x / AMD-V) that boots from external media.
+  `dosfstools`, `exfatprogs`). On macOS or Windows, use
+  [Via Docker](#via-docker-linux-host-only).
+- A **≥500 GB SSD or USB drive** as the target medium (`phermes-build` WILL erase it).
+- An **x86-64 target machine** with KVM (Intel VT-x / AMD-V) that boots from external
+  media. Same machine is fine if it can dual-boot from the new SSD.
+
+The walkthrough uses the dev-credentials path throughout so the LUKS passphrase is the
+well-known `phermes-change-me`. Switch to a production passphrase (`--luks-passphrase
+<chosen>` or `PHERMES_LUKS_PASSPHRASE` env var, without `--dev-credentials`) once you've
+verified the appliance boots.
+
+### 1. Start with a blank disk
+
+Identify the target device. Be careful — `phermes-build` overwrites it without
+confirmation.
 
 ```bash
-# 1. Get the toolchain
+lsblk -dn -o NAME,SIZE,MODEL,TRAN
+# e.g.: nvme1n1  931.5G  WD_BLACK SN850X 1TB  nvme
+TARGET=/dev/sdb      # or /dev/nvme1n1 etc — set this for the rest of the walkthrough
+```
+
+**Verify:** the device shows up, the size is ≥500 GB, and it's the disk you intend to
+erase. Triple-check this. There is no "are you sure?" prompt later.
+
+> **No spare disk?** Skip to [Smoke testing on a virtual disk](#smoke-testing-on-a-virtual-disk) — the same build pipeline runs against a loop-mounted sparse file and boots in QEMU. Come back to step 2 once you have real media.
+
+### 2. Prepare the disk
+
+Get the toolchain and run the first build. This installs into `$TARGET` end-to-end.
+
+```bash
 git clone https://github.com/phretor/phermes && cd phermes
 just install
 
-# 2. Try it against a virtual disk first (no real hardware required)
-just smoke-create     # 500 GB sparse image + loop device
-just smoke-full       # full build into the loop device
-just smoke-qemu serial=1   # boot in QEMU, watch the boot log on the serial console
-just smoke-clean
-
-# 3. Build on a real SSD. Production needs a LUKS passphrase you can remember.
-lsblk                  # identify the target disk — be careful, it WILL be erased
-sudo PHERMES_LUKS_PASSPHRASE='choose-a-strong-passphrase' \
-    uv run phermes-build /dev/sdX
-
-# 4. Boot the SSD on the target machine, unlock LUKS, then from your workstation:
-ssh root@phermes.local         # appliance announces itself via mDNS
-phermesctl status              # see what's running
-phermesctl activate linux      # start the bundled Linux guest
-phermesctl console linux       # attach to its serial console (Ctrl-] to detach)
+sudo PHERMES_LUKS_PASSPHRASE='phermes-change-me' \
+    uv run phermes-build "$TARGET" \
+    --dev-credentials \
+    --dev-ssh-pubkey "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
-For a **dev build** with known credentials, SSH key authorized, and a pre-staged guest
-image:
+What just happened, in order:
+
+1. GPT partition table written: EFI (512 MB, vfat), `/boot` (1 GB, ext4), LUKS2
+   container, optional exFAT share at the tail.
+2. LUKS2 opened (passphrase `phermes-change-me` for the dev path).
+3. LVM volume group `pve` created inside LUKS — `pve-root` (30 GB, ext4) plus
+   `pve-data` (LVM-thin pool, ~370 GB).
+4. Btrfs LV formatted with `@overlay`, `@phermes`, `@snapshots` subvolumes.
+5. `debootstrap` bookworm + the `phermesd` Rust orchestrator compiled and installed.
+6. First-boot flag written; `/etc/phermes/secrets/` created (mode 0700) so the operator
+   can drop secrets in later.
+
+**Verify:** the run exits 0 and the final line is `PHermes SSD ready.`. If it bails
+mid-run, the most common cause on first attempts is a missing kernel module
+(`dm-thin-pool`, `dm-crypt`, `btrfs`, `vfat`) — `sudo modprobe` them and retry.
+
+### 3. Verify the partition layout and content
+
+From the builder, without booting the appliance yet.
+
+GPT layout from outside LUKS:
 
 ```bash
-sudo uv run phermes-build /dev/sdX \
-    --dev-credentials \
-    --dev-ssh-pubkey "$(cat ~/.ssh/id_ed25519.pub)" \
-    --import-vm linux=/path/to/linux.qcow2
+lsblk -f "$TARGET"
 ```
 
-To run a macOS guest you must also supply the Apple OSK — either pre-seeded with
-`--dev-apple-osk <64-hex>` (dev builds only) or by writing it to
-`/etc/phermes/secrets/apple.osk` (mode 0400) on the appliance after install.
+Expected (paths shown for `/dev/sdb`; substitute your target):
+
+```
+NAME    FSTYPE      LABEL          MOUNTPOINTS
+sdb
+├─sdb1  vfat        EFI
+├─sdb2  ext4        boot
+├─sdb3  crypto_LUKS
+└─sdb4  exfat       PHERMES_SHARE
+```
+
+Now peek inside LUKS:
+
+```bash
+# Pick the LUKS partition path — sdb3 vs nvme0n1p3 etc.
+LUKS=$(lsblk -ln -o NAME,FSTYPE "$TARGET" | awk '$2=="crypto_LUKS"{print "/dev/"$1}')
+
+sudo cryptsetup luksOpen "$LUKS" phermes_check   # passphrase: phermes-change-me
+sudo vgchange -ay pve
+sudo lvs pve
+# Expect three LVs: root (30G ext4), data (thin pool ~370G), and a Btrfs LV.
+
+sudo mount /dev/pve/root /mnt
+ls /mnt/etc/phermes/                              # vms/  secrets/  firstboot.flag
+cat /mnt/etc/phermes/vms/linux.toml | head -10
+```
+
+Expected `linux.toml` head:
+
+```toml
+flavor = "linux"
+[resources]
+memory_mib = 4096
+vcpus = 4
+cpu = "host"
+[firmware]
+ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"
+```
+
+Tear down cleanly:
+
+```bash
+sudo umount /mnt
+sudo vgchange -an pve
+sudo cryptsetup luksClose phermes_check
+```
+
+**Verify:** all three LVs present, `linux.toml` matches, `/etc/phermes/secrets/` exists
+even though no OSK was supplied yet.
+
+### 4. Boot a minimal Linux guest (Ubuntu cloud image)
+
+The Linux flow uses cloud-init seeded qcow2 images, not installer ISOs. The cloud image
+is already configured to accept a `dev` user with your SSH key on first boot.
+
+```bash
+wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img \
+    -O /tmp/ubuntu-noble.qcow2
+```
+
+Re-run `phermes-build` against the same target, now with the Linux import:
+
+```bash
+sudo PHERMES_LUKS_PASSPHRASE='phermes-change-me' \
+    uv run phermes-build "$TARGET" \
+    --dev-credentials \
+    --dev-ssh-pubkey "$(cat ~/.ssh/id_ed25519.pub)" \
+    --import-vm linux=/tmp/ubuntu-noble.qcow2
+```
+
+This rebuilds the appliance with the Linux guest's `pve-data` LV populated from the
+qcow2 (`qemu-img convert -O raw`). The cloud-init NoCloud seed at
+`/var/lib/phermes/seed/linux.iso` carries your SSH key.
+
+Now boot the SSD on the target machine, type the LUKS passphrase
+(`phermes-change-me`), wait for systemd → phermesd → mDNS, then from your workstation:
+
+```bash
+ssh root@phermes.local
+phermesctl list                     # 'linux' shown, state 'stopped'
+phermesctl activate linux           # spawn QEMU, attach QMP, wait for boot
+phermesctl console linux            # serial console (Ctrl-] to detach)
+```
+
+Inside the guest console, confirm cloud-init succeeded:
+
+```
+cloud-init status   # should report 'done'
+id dev              # confirms dev user exists
+ip addr show eth0   # DHCP-assigned address on the vmbr0 bridge
+```
+
+Then from your workstation, SSH into the *guest* (through the appliance's NAT):
+
+```bash
+ssh dev@<guest-ip>     # via vmbr0; key-auth, no password
+```
+
+**Verify:** the guest boots, cloud-init completes, and `dev` SSH works without a
+password. If SSH is refused, the cloud-init seed didn't ship — re-check that
+`--dev-credentials` and `--dev-ssh-pubkey` were both passed.
+
+Common failures:
+- Guest stuck at GRUB → the qcow2 isn't a cloud image (you passed an installer ISO).
+- `cloud-init status` reports `error` → the seed didn't mount; verify
+  `phermesctl status linux` shows the CDROM disk.
+- `ssh dev@…` refused → the key in `~/.ssh/id_ed25519.pub` differs from what was seeded.
+
+### 5. Build and boot a macOS guest (BYOI via OSX-KVM)
+
+PHermes accepts a pre-installed macOS qcow2; it does not build one. The canonical
+upstream for producing such a qcow2 on commodity hardware is
+[OSX-KVM](https://github.com/kholia/OSX-KVM) — this step walks through its core
+workflow and then hands the result to `phermes-build`.
+
+**Legal note.** Apple's macOS EULA permits virtualization only on Apple-branded
+hardware. PHermes ships no Apple binaries and no OpenCore images. By following the
+steps below you assert that you are running on Apple hardware (or that your local
+jurisdiction permits otherwise). Distribution of the resulting qcow2 is on you.
+
+#### 5.1 Set up OSX-KVM
+
+```bash
+git clone --depth=1 https://github.com/kholia/OSX-KVM ~/OSX-KVM
+cd ~/OSX-KVM
+# Install QEMU, OVMF, libguestfs-tools etc. — per the OSX-KVM README:
+sudo apt install -y qemu-system-x86 qemu-utils python3 dmg2img \
+    libguestfs-tools uml-utilities virt-manager
+```
+
+#### 5.2 Fetch the macOS installer
+
+```bash
+cd ~/OSX-KVM
+python3 fetch-macOS-v2.py     # interactive — pick a recent Sonoma or Sequoia build
+dmg2img -i BaseSystem.dmg BaseSystem.img
+```
+
+The download is ~14 GB and pulls from Apple's CDN; restart the script if the network
+flakes mid-way.
+
+#### 5.3 Generate fresh SMBIOS
+
+Every appliance should have a unique board-id / serial / MLB / ROM tuple. OSX-KVM
+bundles a generator:
+
+```bash
+cd ~/OSX-KVM
+python3 GenSMBIOS.py            # follow prompts; updates OpenCore/config.plist
+```
+
+#### 5.4 Install macOS into a qcow2
+
+```bash
+cd ~/OSX-KVM
+qemu-img create -f qcow2 macOS.qcow2 120G
+./OpenCore-Boot.sh              # boots installer with OpenCore + applesmc
+```
+
+Inside the macOS installer GUI:
+
+1. **Disk Utility** → erase the 120 GB volume as **APFS**, name it however you like.
+2. **Reinstall macOS** → choose the freshly erased volume → install.
+3. When the VM reboots, the OpenCore picker reappears. Select **macOS Installer** to
+   continue stage two.
+4. After the second reboot, select **macOS** to finish setup (region, language,
+   account creation — you can use a local-only account; iCloud is irrelevant here).
+5. Once you reach the desktop, **shut down** from the Apple menu — _do not pull
+   power_, or the APFS journal may be inconsistent.
+
+Total wall time: 1–3 hours depending on host CPU and network. The resulting
+`~/OSX-KVM/macOS.qcow2` is now bootable.
+
+#### 5.5 Capture the Apple OSK
+
+The OSK is a 64-character string Apple's firmware exposes to macOS via the SMC chip.
+It's documented in xnu's historical source comments (search for `AppleSMCKeyStore`)
+and embedded in OSX-KVM's boot scripts as the value of `-device
+isa-applesmc,osk=…`. Find it in `~/OSX-KVM/boot-macOS.sh` (or whichever boot script
+OSX-KVM currently ships) and save the literal 64-character payload to a local file:
+
+```bash
+chmod 700 ~/OSX-KVM
+# Find the OSK in OSX-KVM's reference boot script and save the literal 64 chars.
+# The format and quoting differ across OSX-KVM versions — inspect the script and
+# extract by hand if the line is non-obvious.
+grep -m1 -E "isa-applesmc,osk=" ~/OSX-KVM/boot-macOS.sh
+# Then put the 64-char value (without surrounding quotes) into osk.txt:
+$EDITOR ~/OSX-KVM/osk.txt
+chmod 400 ~/OSX-KVM/osk.txt
+wc -c < ~/OSX-KVM/osk.txt          # expect 64 (or 65 with trailing newline)
+```
+
+PHermes deliberately does not embed or distribute this value — every operator brings
+their own.
+
+#### 5.6 Import into phermes-build
+
+Two paths. **A) at build time** is the dev-convenient one:
+
+```bash
+sudo PHERMES_LUKS_PASSPHRASE='phermes-change-me' \
+    uv run phermes-build "$TARGET" \
+    --dev-credentials \
+    --dev-ssh-pubkey "$(cat ~/.ssh/id_ed25519.pub)" \
+    --import-vm linux=/tmp/ubuntu-noble.qcow2 \
+    --import-vm macos="$HOME/OSX-KVM/macOS.qcow2" \
+    --dev-apple-osk "$(cat $HOME/OSX-KVM/osk.txt)"
+```
+
+**B) post-install** is the production-aligned variant, where the build ships no OSK
+and the operator drops it in after first boot:
+
+```bash
+# Copy the qcow2 to the appliance, then convert into the macOS LV in place:
+scp ~/OSX-KVM/macOS.qcow2 root@phermes.local:/tmp/
+ssh root@phermes.local '
+    qemu-img convert -O raw /tmp/macOS.qcow2 /dev/pve/vm-100-disk-0 \
+        && rm /tmp/macOS.qcow2
+'
+
+# Drop the OSK file at mode 0400, root-owned:
+ssh root@phermes.local 'install -m 0400 -o root -g root /dev/stdin /etc/phermes/secrets/apple.osk' \
+    < ~/OSX-KVM/osk.txt
+```
+
+#### 5.7 Activate macOS
+
+```bash
+ssh root@phermes.local
+phermesctl activate macos              # auto-snapshots whatever was running, switches
+```
+
+macOS has no serial console available the way Linux does, so attach via VNC over an
+SSH tunnel:
+
+```bash
+# From your workstation:
+ssh -L 5900:/run/phermesd/macos/vnc.sock root@phermes.local &
+# Then point any VNC client at localhost:5900 (no password — restricted by the tunnel).
+```
+
+**Verify:** the VNC display shows the OpenCore boot picker → Apple logo with progress
+bar → macOS login window.
+
+Common failures:
+- `phermesctl activate macos` errors with `MissingAppleOsk` → the file is absent, has
+  wrong mode (must be 0400), or is owned by someone other than root. (Note: the current
+  validator also rejects values that aren't 64 hex characters — see the OSK-format bug
+  flagged in CHANGELOG; until fixed, dev workflows may need a placeholder hex string.)
+- OpenCore can't find a bootable volume → the qcow2 was truncated during scp; verify
+  size matches on both sides (`stat -c %s`).
+- Kernel panic seconds into boot → host CPU is missing one of the Penryn-family flags
+  the macos.toml CPU profile requires; check `/proc/cpuinfo | grep -E 'avx|aes|xsave'`.
+- Reboot loop at OpenCore → SMBIOS from step 5.3 conflicts with what OSX-KVM expects;
+  re-run `GenSMBIOS.py` and rebuild the OpenCore EFI.
+
+### 6. Verify the disk boots end-to-end
+
+A final cold-start smoke test confirms everything composes correctly.
+
+1. **Power off** the appliance, **remove** the SSD, **re-insert**, and **boot**.
+2. Type the LUKS passphrase (`phermes-change-me` for the dev path).
+3. Wait ~30 seconds for the login banner and mDNS announce.
+
+From your workstation:
+
+```bash
+ping -c 2 phermes.local           # mDNS resolves
+ssh root@phermes.local
+phermesctl list                   # both linux and macos shown; both stopped initially
+phermesctl activate linux && sleep 30
+phermesctl status                 # linux running
+phermesctl activate macos         # auto-snapshots linux disk + overlay, then switches
+phermesctl status                 # macos running, linux known but stopped
+phermesctl snapshots macos        # confirm pre-switch checkpoint present
+```
+
+**End-state success criterion:** both `phermesctl activate linux` and `phermesctl
+activate macos` produce visibly booting guests on the SSD you built, and the auto-
+snapshot before each switch is recorded.
+
+Troubleshooting checklist if something is off:
+
+- mDNS doesn't resolve → check Avahi running on the appliance (`systemctl status
+  avahi-daemon`); or use the IP from `ip neigh` on the builder side.
+- LUKS passphrase rejected → confirm Caps Lock; dev builds use `phermes-change-me`,
+  production whatever you set with `--luks-passphrase`.
+- `phermesctl activate macos` returns `MissingAppleOsk` → see step 5.7's failure list.
+- macOS reboots in a loop → SMBIOS / OpenCore config mismatch; rebuild OpenCore EFI
+  per step 5.3.
+- Linux guest SSH refused → cloud-init seed missing; production builds don't ship one,
+  so set up the guest manually or rebuild with `--dev-credentials`.
+
+Once the appliance is verified, switch to a production passphrase: re-run
+`phermes-build "$TARGET" --luks-passphrase '<your-strong-passphrase>' [other flags
+without --dev-credentials]` to rebuild without baked-in dev credentials.
 
 ## Security
 
