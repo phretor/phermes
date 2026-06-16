@@ -37,7 +37,7 @@ Plug it into any KVM-capable machine. Boot. Open a browser. Your [Hermes Agent](
  ║                                                          ║
  ║  ▸ Partitioning SSD ................................ done ║
  ║  ▸ Creating LUKS2 container ........ [████████░░] 80%   ║
- ║  ▸ Installing Proxmox VE .............. pending          ║
+ ║  ▸ Installing minimal Debian + phermesd .. pending       ║
  ║  ▸ Configuring PHermes ................. pending          ║
  ║  ▸ Importing VM image .................. pending          ║
  ║                                                          ║
@@ -59,24 +59,74 @@ The `phermesd` daemon is invisible to end users. PHermes wraps it with a purpose
 web UI that exposes only what matters: VM console, Hermes dashboard, storage, and system
 controls.
 
+## Getting started
+
+You need:
+
+- A **Linux builder** with Python 3.13+, [`uv`](https://docs.astral.sh/uv/), and the
+  partitioning toolchain (`cryptsetup`, `lvm2`, `btrfs-progs`, `debootstrap`,
+  `dosfstools`, `exfatprogs`). On macOS or Windows, use [Via Docker](#via-docker-linux-host-only).
+- A **≥500 GB SSD or USB drive** to write the appliance onto (`phermes-build` WILL erase it).
+- An **x86-64 target machine** with KVM (Intel VT-x / AMD-V) that boots from external media.
+
+```bash
+# 1. Get the toolchain
+git clone https://github.com/phretor/phermes && cd phermes
+just install
+
+# 2. Try it against a virtual disk first (no real hardware required)
+just smoke-create     # 500 GB sparse image + loop device
+just smoke-full       # full build into the loop device
+just smoke-qemu serial=1   # boot in QEMU, watch the boot log on the serial console
+just smoke-clean
+
+# 3. Build on a real SSD. Production needs a LUKS passphrase you can remember.
+lsblk                  # identify the target disk — be careful, it WILL be erased
+sudo PHERMES_LUKS_PASSPHRASE='choose-a-strong-passphrase' \
+    uv run phermes-build /dev/sdX
+
+# 4. Boot the SSD on the target machine, unlock LUKS, then from your workstation:
+ssh root@phermes.local         # appliance announces itself via mDNS
+phermesctl status              # see what's running
+phermesctl activate linux      # start the bundled Linux guest
+phermesctl console linux       # attach to its serial console (Ctrl-] to detach)
+```
+
+For a **dev build** with known credentials, SSH key authorized, and a pre-staged guest
+image:
+
+```bash
+sudo uv run phermes-build /dev/sdX \
+    --dev-credentials \
+    --dev-ssh-pubkey "$(cat ~/.ssh/id_ed25519.pub)" \
+    --import-vm linux=/path/to/linux.qcow2
+```
+
+To run a macOS guest you must also supply the Apple OSK — either pre-seeded with
+`--dev-apple-osk <64-hex>` (dev builds only) or by writing it to
+`/etc/phermes/secrets/apple.osk` (mode 0400) on the appliance after install.
+
 ## Security
 
 PHermes is designed for users who treat their AI environment as infrastructure worth protecting.
 
 - **Full-disk encryption.** LUKS2 wraps everything except `/boot` and the EFI partition.
   Data at rest is unreadable without the passphrase. Theft of the drive means nothing.
-- **VM isolation.** Hermes runs inside a VM, never on the host. The Proxmox host surface
-  is minimal, hardened, and not exposed to the network.
-- **Network lockdown.** Proxmox management (port 8006) is firewalled to localhost —
-  reachable only via SSH tunnel. Samba is bound to the internal VM bridge, not the LAN.
-- **No binaries distributed.** `phermes-build` fetches Proxmox from official community
-  repos at build time. The tool itself is signed and checksummed. Nothing is bundled or
-  pre-compiled by PHermes.
+- **VM isolation.** Hermes runs inside a VM, never on the host. The host is a minimal
+  Debian system running only `phermesd` (a small Rust orchestrator) and `sshd` — no
+  Proxmox, no web stack, no extra services.
+- **Network lockdown.** Management is `phermesctl` over SSH; there is no listening web
+  service on the host. Samba is bound to the internal VM bridge, not the LAN. Apple OSK
+  and other runtime secrets live in `/etc/phermes/secrets/` (mode 0700, root-only).
+- **No binaries distributed.** `phermes-build` debootstraps Debian from official mirrors
+  at build time and compiles `phermesd` from the source tree. The tool itself is signed
+  and checksummed. No OS images, no Apple/Microsoft binaries, no OpenCore — operators
+  supply their own guest images.
 - **No shipped credentials.** A production build locks the root account (no console
   login) and refuses to use a hardcoded LUKS key — the passphrase is operator-supplied at
-  build time. Proxmox admin happens only through the restricted PHermes UI / RBAC, never a
-  default password. Known test credentials exist solely behind an explicit
-  `--dev-credentials` flag and can never appear in a normal build.
+  build time. The Apple OSK is also operator-supplied (drop into
+  `/etc/phermes/secrets/apple.osk` post-install). Known test credentials exist solely
+  behind an explicit `--dev-credentials` flag and can never appear in a normal build.
 - **No mandatory cloud.** LLM API calls are the only optional outbound traffic. Everything
   else runs entirely offline. Local model backends (llama.cpp, vLLM, Ollama) are supported.
 - **Snapshot-before-change.** Every VM switch and every update triggers an automatic
@@ -109,9 +159,9 @@ PHermes is not a fixed appliance. It adapts to how you work.
   vs. the exFAT drag-and-drop share. Default: 330 GB / 250 GB on a 1 TB drive.
 - **VM specs.** RAM, disk size, and display configuration are set at build time and
   adjustable later via the PHermes UI.
-- **Bring your own images.** Pre-stage a VM disk before running `phermes-build`,
-  download at first boot, or use the `phermes-build --download-vm` pipeline.
-  PHermes never distributes OS images.
+- **Bring your own images.** Pre-stage a VM disk before running `phermes-build` and
+  pass it with `--import-vm <flavor>=<path>` (linux, windows, or macos). PHermes
+  never distributes OS images.
 - **Knowledge base grows with you.** Hermes profiles, tasks, memory, and documents
   live on the encrypted data partition and persist across guest OS switches, updates,
   and even full re-flashes of the system partition.
@@ -140,16 +190,56 @@ minimal Debian host running `phermesd` under UEFI with encrypted-root unlock,
 and a Linux guest (Debian, glibc) that runs the Hermes runtime — exercised by a
 loop-device + QEMU smoke harness (`just smoke-*`) with serial console and dev SSH.
 
-Not yet built: the first-boot wizard, the PHermes web UI, VM-flavor switching, and the
-macOS/Windows guests (Phases 2–4). Credentials and networking in the build are provisional
-dev defaults the wizard will own — production builds ship **no** known passwords/keys.
+Guest support: Linux (cloud-init seeded in dev builds), Windows BYOI, and macOS BYOI all
+provision at install time via `--import-vm <flavor>=<path>`. macOS additionally requires
+the Apple OSK at `/etc/phermes/secrets/apple.osk`.
+
+Not yet built: the first-boot wizard, the PHermes web UI, and runtime VM-flavor switching
+through the UI. Production builds already ship **no** known passwords or keys.
 
 Design spec: [`docs/superpowers/specs/2026-05-31-phermes-design.md`](docs/superpowers/specs/2026-05-31-phermes-design.md)
 Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs/superpowers/plans/2026-05-31-phase1-phermes-build.md)
 
 ### phermesd (in development)
 
-`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM operation. Slice #1 (implemented) defines VMs from TOML, spawns and supervises one QEMU/KVM guest over QMP, stops it gracefully, reports status, and re-adopts a running VM after a daemon restart. Control is over a Unix-domain socket via the `phermesctl` client. Slice #2 (implemented) adds storage & snapshots: it provisions LVM-thin VM disks, imports local images, and takes QGA-quiesced checkpoints of the VM disk and Btrfs overlay together — auto-snapshotting before a VM switch — with retention pruning, a thin-pool capacity guard, and one-command rollback (`phermesctl provision|snapshot|rollback|snapshots`). Design: [`docs/superpowers/specs/2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md), [`docs/superpowers/specs/2026-06-03-phermesd-storage-design.md`](docs/superpowers/specs/2026-06-03-phermesd-storage-design.md). Slice #6 MVP (implemented): the appliance now boots a minimal Debian host running phermesd directly — no Proxmox VE. Management is `phermesctl` over SSH; `--import-vm linux=<path>` provisions a Linux VM at install time; `--no-vm` installs the host alone. Design: [`docs/superpowers/specs/2026-06-04-phermesd-host-image-mvp-design.md`](docs/superpowers/specs/2026-06-04-phermesd-host-image-mvp-design.md). Slice #4a (implemented): dev builds (`--dev-credentials --dev-ssh-pubkey <key>`) now ship a cloud-init NoCloud seed at `/var/lib/phermes/seed/linux.iso`, attached to the Linux guest as a CDROM. First boot configures a `dev` user with the operator's SSH key, brings up DHCP on `vmbr0`, and installs `uv` so Hermes can run. Production builds (no `--dev-credentials`) ship no seed. Design: [`docs/superpowers/specs/2026-06-05-phermesd-cloud-init-design.md`](docs/superpowers/specs/2026-06-05-phermesd-cloud-init-design.md). Slice #4b (implemented): `phermesctl console <id>` attaches to the guest's serial line — raw terminal, Ctrl-] to detach. Ctrl-C reaches the guest (not phermesctl). VNC is doc-only: from a workstation, run `ssh -L 5900:/run/phermesd/linux/vnc.sock <appliance>` and point any VNC client at `localhost:5900`. Design: [`docs/superpowers/specs/2026-06-10-phermesd-console-proxy-design.md`](docs/superpowers/specs/2026-06-10-phermesd-console-proxy-design.md). Slice #5a (implemented): Windows guest support via BYOI — `--import-vm windows=<path>` provisions a Windows VM at install time (100 GB LVM-thin LV, VMID=101, 8 GiB RAM, virtio-scsi + virtio-net, OVMF firmware); the operator supplies a pre-installed qcow2 with virtio drivers already loaded. No cloud-init seed (unattend.xml is a later slice). Design: [`docs/superpowers/specs/2026-06-12-phermesd-windows-guest-design.md`](docs/superpowers/specs/2026-06-12-phermesd-windows-guest-design.md). Slice #5b (implemented): macOS guest support via BYOI — `--import-vm macos=<path>` provisions a macOS VM (120 GB LVM-thin LV, VMID=100, 12 GiB RAM, AHCI + vmxnet3, OVMF + Penryn CPU). The operator supplies an OpenCore + macOS qcow2 plus the Apple OSK at `/etc/phermes/secrets/apple.osk` (mode 0400) — production builds ship no Apple credentials. Design: [`docs/superpowers/specs/2026-06-15-phermesd-macos-guest-design.md`](docs/superpowers/specs/2026-06-15-phermesd-macos-guest-design.md).
+`phermesd` is a thin Rust/tokio VM orchestrator that replaces Proxmox VE for single-active-VM
+operation. Implementation lands in stacked slices:
+
+- **Slice #1 — core orchestrator.** TOML-defined VMs, QEMU/KVM spawn + QMP supervision,
+  graceful stop, status, and post-restart re-adopt. Control over a Unix-domain socket via
+  the `phermesctl` client. Design:
+  [`2026-06-03-phermesd-design.md`](docs/superpowers/specs/2026-06-03-phermesd-design.md).
+- **Slice #2 — storage and snapshots.** LVM-thin VM-disk provisioning, local image import,
+  QGA-quiesced checkpoints of the VM disk and Btrfs overlay together, auto-snapshot before
+  a VM switch, retention prune, thin-pool capacity guard, one-command rollback
+  (`phermesctl provision|snapshot|rollback|snapshots`). Design:
+  [`2026-06-03-phermesd-storage-design.md`](docs/superpowers/specs/2026-06-03-phermesd-storage-design.md).
+- **Slice #6 — host image MVP.** The appliance boots a minimal Debian host running
+  phermesd directly — no Proxmox VE. Management is `phermesctl` over SSH; `--no-vm`
+  installs the host alone. Design:
+  [`2026-06-04-phermesd-host-image-mvp-design.md`](docs/superpowers/specs/2026-06-04-phermesd-host-image-mvp-design.md).
+- **Slice #4a — cloud-init for the Linux guest.** Dev builds
+  (`--dev-credentials --dev-ssh-pubkey <key>`) ship a NoCloud seed at
+  `/var/lib/phermes/seed/linux.iso` attached as a CDROM. First boot configures a `dev`
+  user with the operator's SSH key, DHCP on `vmbr0`, and installs `uv`. Production builds
+  ship no seed. Design:
+  [`2026-06-05-phermesd-cloud-init-design.md`](docs/superpowers/specs/2026-06-05-phermesd-cloud-init-design.md).
+- **Slice #4b — console proxy.** `phermesctl console <id>` attaches to the guest's serial
+  line (raw terminal, Ctrl-] to detach; Ctrl-C reaches the guest). VNC is doc-only: from a
+  workstation, `ssh -L 5900:/run/phermesd/<id>/vnc.sock <appliance>` and point any VNC
+  client at `localhost:5900`. Design:
+  [`2026-06-10-phermesd-console-proxy-design.md`](docs/superpowers/specs/2026-06-10-phermesd-console-proxy-design.md).
+- **Slice #5a — Windows guest (BYOI).** `--import-vm windows=<path>` provisions a Windows
+  VM at install time (100 GB LVM-thin LV, VMID=101, 8 GiB RAM, virtio-scsi + virtio-net,
+  OVMF). Operator supplies a pre-installed qcow2 with virtio drivers loaded. No
+  cloud-init seed; unattend.xml is a later slice. Design:
+  [`2026-06-12-phermesd-windows-guest-design.md`](docs/superpowers/specs/2026-06-12-phermesd-windows-guest-design.md).
+- **Slice #5b — macOS guest (BYOI).** `--import-vm macos=<path>` provisions a macOS VM
+  (120 GB LVM-thin LV, VMID=100, 12 GiB RAM, AHCI + vmxnet3, OVMF + Penryn CPU). Operator
+  supplies an OpenCore + macOS qcow2 plus the Apple OSK at
+  `/etc/phermes/secrets/apple.osk` (mode 0400). Production builds ship no Apple
+  credentials. Design:
+  [`2026-06-15-phermesd-macos-guest-design.md`](docs/superpowers/specs/2026-06-15-phermesd-macos-guest-design.md).
 
 ## Hardware requirements
 
@@ -164,8 +254,9 @@ Phase 1 plan: [`docs/superpowers/plans/2026-05-31-phase1-phermes-build.md`](docs
 
 ## Distribution
 
-PHermes ships as `phermes-build` — a signed Python CLI that assembles a bootable SSD
-from official upstream sources. No Proxmox, macOS, or Windows binaries are bundled.
+PHermes ships as `phermes-build` — a signed Python CLI that assembles a bootable SSD from
+official upstream sources. No OS binaries, no Apple/Microsoft images, and no OpenCore are
+bundled — operators supply their own guest images.
 
 ### Native (Linux)
 
@@ -176,7 +267,7 @@ Requires Python 3.13+, uv, and the Linux toolchain (`cryptsetup`, `lvm2`, `btrfs
 # Minimal — first-boot wizard handles VM image acquisition
 phermes-build /dev/sdX
 
-# Disk setup only — skip Proxmox install (fast iteration / smoke testing)
+# Disk setup only — skip host install (fast iteration / smoke testing)
 phermes-build /dev/sdX --skip-os-install
 
 # With pre-staged guest images (BYOI). Repeat --import-vm per flavor.
@@ -191,11 +282,8 @@ phermes-build /dev/sdX \
 # Production: drop the Apple OSK into /etc/phermes/secrets/apple.osk (mode 0400)
 # on the appliance post-install instead of using --dev-apple-osk.
 
-# Download VM images at build time
-phermes-build /dev/sdX --download-vm macos --download-vm windows
-
-# Custom share partition
-phermes-build /dev/sdX --share-size 500G --share-encrypted
+# Custom share partition (size in GB; 0 disables)
+phermes-build /dev/sdX --share-size 500 --share-encrypted
 ```
 
 ### Via Docker (Linux host only)
@@ -243,7 +331,7 @@ hardware required. The recipes manage the loop device, kernel modules, and teard
 ```bash
 just smoke-create     # 500G sparse image at /tmp/phermes-smoke.img + loop device
 just smoke-run        # disk setup only (partition/LUKS/LVM/Btrfs), ~seconds
-just smoke-full       # full build including Proxmox install
+just smoke-full       # full build including minimal Debian + phermesd install
 just smoke-inspect    # lsblk + LVM + Btrfs state
 just smoke-verify     # mount every partition and assert expected content
 just smoke-qemu       # boot the image in QEMU under OVMF (UEFI, no KVM needed)
@@ -254,9 +342,9 @@ just smoke-clean      # tear down and delete the image
 ### Running a Linux node guest (nested)
 
 `just smoke-full-node` bundles a Debian cloud image into the build (dev only — production
-never ships an OS image). After booting the PHermes host, `phermes-node` has Proxmox start
-it as a nested KVM guest, configured via cloud-init (a `dev` user with your `.dev-ssh` key,
-a static IP on an internal NAT bridge). Then:
+never ships an OS image). After booting the PHermes host, `phermesd` starts it as a
+nested KVM guest, configured via the slice #4a cloud-init seed (a `dev` user with your
+`.dev-ssh` key, DHCP on the internal bridge). Then:
 
 ```bash
 just smoke-node          # boot the node, attach its serial console
@@ -278,8 +366,8 @@ see the full boot log and can type the LUKS passphrase there. Exit serial mode w
 It uses **KVM acceleration when `/dev/kvm` is available** and falls back to TCG emulation
 automatically when it isn't — so KVM is never required, just used when present. If the
 host has nested virtualization enabled (`kvm_intel`/`kvm_amd nested=1`) and `-cpu host`
-exposes `vmx`/`svm`, the inner Proxmox VMs can accelerate too; otherwise only the PHermes
-host itself is accelerated.
+exposes `vmx`/`svm`, the inner phermesd guest can accelerate too; otherwise only the
+PHermes host itself is accelerated.
 
 Unlike the build, `smoke-qemu` needs **no root**: QEMU runs as your user (native) or
 unprivileged in the container (Docker), reading the image read-only via `-snapshot`. The
@@ -302,6 +390,7 @@ appliance or hosted offering. Contact <fede@maggi.cc>.
 
 Components fetched or used at build/run time keep their own licenses:
 
-- Proxmox VE (fetched from official repos at build time): AGPL-3.0
+- Debian (debootstrapped at build time), the Linux kernel, and other packages: their
+  respective licenses
 - Hermes Agent: MIT
-- Debian, the Linux kernel, and other packages: their respective licenses
+- Rust crates used by `phermesd`: their respective licenses (mostly MIT/Apache-2.0)
