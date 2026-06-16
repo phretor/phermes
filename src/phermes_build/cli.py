@@ -201,7 +201,7 @@ def _resolve_luks_passphrase(dev_credentials: bool, luks_passphrase: str | None)
     raise SystemExit(1)
 
 
-_SUPPORTED_IMPORT_FLAVORS = ("linux", "windows")
+_SUPPORTED_IMPORT_FLAVORS = ("linux", "windows", "macos")
 
 
 def _vm_source(import_vm_args: list[str], flavor: str) -> str | None:

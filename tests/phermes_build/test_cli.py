@@ -236,7 +236,7 @@ def test_import_vm_linux_routes_into_provision_linux_disk(monkeypatch):
 
 
 def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
-    """--import-vm macos=<path> is rejected (slice #5a supports linux + windows)."""
+    """--import-vm freebsd=<path> is rejected (slice #5b supports linux + windows + macos)."""
     from phermes_build import cli as cli_mod
 
     for helper in (
@@ -257,7 +257,7 @@ def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
 
     result = runner.invoke(
         cli_mod.app,
-        ["/dev/loop0", "--import-vm", "macos=/tmp/m.qcow2", "--dev-credentials"],
+        ["/dev/loop0", "--import-vm", "freebsd=/tmp/fb.qcow2", "--dev-credentials"],
     )
     assert result.exit_code != 0
 
@@ -414,7 +414,7 @@ def test_vm_source_rejects_unsupported_flavor():
     from phermes_build import cli as cli_mod
 
     with pytest.raises(typer.BadParameter):
-        cli_mod._vm_source(["macos=/m.qcow2"], "linux")
+        cli_mod._vm_source(["freebsd=/fb.qcow2"], "linux")
 
 
 # ── W6: Windows VM provisioning wired into build() ──────────────────────────
@@ -534,3 +534,22 @@ def test_provision_windows_vm_calls_write_def_and_provision_disk(monkeypatch):
 
     assert any(c.startswith("write:") for c in calls)
     assert "disk:/tmp/win.qcow2" in calls
+
+
+# ── M4: _vm_source accepts macos= ───────────────────────────────────────────
+
+
+def test_vm_source_accepts_macos_flavor():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["macos=/tmp/m.qcow2"], "macos") == "/tmp/m.qcow2"
+
+
+def test_vm_source_returns_none_for_other_flavor_when_only_macos_given():
+    from phermes_build import cli as cli_mod
+    assert cli_mod._vm_source(["macos=/tmp/m.qcow2"], "linux") is None
+
+
+def test_vm_source_picks_macos_when_all_three_given():
+    from phermes_build import cli as cli_mod
+    args = ["linux=/a", "windows=/b", "macos=/c"]
+    assert cli_mod._vm_source(args, "macos") == "/c"
