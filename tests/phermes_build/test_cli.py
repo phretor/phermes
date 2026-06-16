@@ -64,6 +64,9 @@ def _patch_all_steps(monkeypatch, called: list) -> None:
         cli_mod, "_provision_linux_vm", lambda *a, **kw: called.append("vms")
     )
     monkeypatch.setattr(cli_mod, "_write_firstboot", lambda: called.append("firstboot"))
+    monkeypatch.setattr(
+        cli_mod, "_ensure_secrets_dir", lambda *a, **kw: called.append("secrets_dir")
+    )
 
 
 def test_skip_os_install_omits_os_steps(monkeypatch):
@@ -221,6 +224,7 @@ def test_import_vm_linux_routes_into_provision_linux_disk(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     def fake_provision(source=None, seed_iso_path=None):
         seen["source"] = source
@@ -254,6 +258,7 @@ def test_unsupported_import_vm_flavor_errors_out(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     result = runner.invoke(
         cli_mod.app,
@@ -280,6 +285,7 @@ def test_no_seed_when_dev_credentials_absent(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     result = runner.invoke(cli_mod.app, [
         "/dev/loop0", "--import-vm", "linux=/tmp/x.qcow2", "--luks-passphrase", "test-pass",
@@ -311,6 +317,7 @@ def test_seed_written_when_dev_credentials_and_key_set(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     result = runner.invoke(cli_mod.app, [
         "/dev/loop0",
@@ -342,6 +349,7 @@ def test_no_seed_when_no_vm(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     result = runner.invoke(cli_mod.app, [
         "/dev/loop0",
@@ -434,6 +442,7 @@ def test_import_vm_windows_routes_into_provision_windows_vm(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
 
     def fake_provision_windows(source=None):
         seen["source"] = source
@@ -462,6 +471,7 @@ def test_import_vm_both_flavors_runs_both_provisioners(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
     monkeypatch.setattr(
         cli_mod, "_provision_linux_vm",
         lambda source=None, seed_iso_path=None: seen.update(linux=source),
@@ -499,6 +509,7 @@ def test_no_vm_skips_windows_provision_even_with_import(monkeypatch):
         monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
     monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+    monkeypatch.setattr(cli_mod, "_ensure_secrets_dir", lambda *a, **k: None)
     monkeypatch.setattr(
         cli_mod, "_provision_windows_vm", lambda *a, **k: seen.append("windows")
     )
@@ -553,3 +564,69 @@ def test_vm_source_picks_macos_when_all_three_given():
     from phermes_build import cli as cli_mod
     args = ["linux=/a", "windows=/b", "macos=/c"]
     assert cli_mod._vm_source(args, "macos") == "/c"
+
+
+# ── M5: --dev-apple-osk flag + secret file ─────────────────────────────────
+
+
+_VALID_OSK = "0123456789abcdef" * 4  # 64 hex chars
+
+
+def test_dev_apple_osk_writes_secret_file_with_0400_mode(tmp_path):
+    from phermes_build import cli as cli_mod
+
+    chroot = str(tmp_path / "chroot")
+    cli_mod._write_apple_osk_secret(chroot, _VALID_OSK)
+
+    osk_path = tmp_path / "chroot" / "etc/phermes/secrets/apple.osk"
+    assert osk_path.exists()
+    assert osk_path.read_text() == _VALID_OSK
+    import os as _os
+    assert (_os.stat(osk_path).st_mode & 0o777) == 0o400
+    secrets_dir = tmp_path / "chroot" / "etc/phermes/secrets"
+    assert (_os.stat(secrets_dir).st_mode & 0o777) == 0o700
+
+
+def test_write_apple_osk_secret_rejects_bad_format(tmp_path):
+    import typer
+
+    from phermes_build import cli as cli_mod
+
+    with pytest.raises(typer.BadParameter):
+        cli_mod._write_apple_osk_secret(str(tmp_path / "chroot1"), "tooshort")
+    with pytest.raises(typer.BadParameter):
+        cli_mod._write_apple_osk_secret(str(tmp_path / "chroot2"), "z" * 64)
+
+
+def test_dev_apple_osk_without_dev_credentials_errors_out(monkeypatch):
+    """--dev-apple-osk without --dev-credentials must fail closed."""
+    from phermes_build import cli as cli_mod
+
+    for helper in (
+        "_setup_luks", "_setup_lvm", "_setup_btrfs", "_setup_exfat",
+        "_install_minimal_host", "_configure_host", "_setup_credentials",
+        "_write_firstboot", "_partition", "_provision_linux_vm",
+    ):
+        monkeypatch.setattr(cli_mod, helper, lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "validate_disk_path", lambda d: None)
+    monkeypatch.setattr(cli_mod, "compute_layout", lambda *a, **k: _fake_layout())
+
+    result = runner.invoke(
+        cli_mod.app,
+        [
+            "/dev/loop0",
+            "--dev-apple-osk", _VALID_OSK,
+            "--luks-passphrase", "x" * 12,
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_ensure_secrets_dir_creates_dir_with_0700_mode(tmp_path):
+    from phermes_build import cli as cli_mod
+    chroot = str(tmp_path / "chroot")
+    cli_mod._ensure_secrets_dir(chroot)
+    import os as _os
+    secrets_dir = tmp_path / "chroot" / "etc/phermes/secrets"
+    assert secrets_dir.exists()
+    assert (_os.stat(secrets_dir).st_mode & 0o777) == 0o700

@@ -54,7 +54,7 @@ def build(
     import_vm: Annotated[
         list[str] | None,
         typer.Option(
-            help="VM image to import: flavor=<path> (linux=, windows=); may repeat."
+            help="VM image to import: flavor=<path> (linux=, windows=, macos=); may repeat."
         ),
     ] = None,
     no_vm: Annotated[
@@ -86,6 +86,13 @@ def build(
             help="DEV: SSH public key to authorize for root login (with --dev-credentials)",
         ),
     ] = None,
+    dev_apple_osk: Annotated[
+        str | None,
+        typer.Option(
+            envvar="PHERMES_DEV_APPLE_OSK",
+            help="DEV: Apple OSK (64 hex chars) for macOS guest (requires --dev-credentials)",
+        ),
+    ] = None,
 ) -> None:
     validate_disk_path(disk)
     set_verbose(verbose)
@@ -96,6 +103,11 @@ def build(
         share_encrypted=share_encrypted,
         temp_luks_passphrase=_resolve_luks_passphrase(dev_credentials, luks_passphrase),
     )
+
+    if dev_apple_osk is not None and not dev_credentials:
+        raise typer.BadParameter(
+            "--dev-apple-osk requires --dev-credentials"
+        )
 
     # Validate --import-vm flavors early so we fail before touching the disk.
     linux_source = _vm_source(import_vm or [], "linux")
@@ -121,7 +133,15 @@ def build(
         ),
         ("Configuring PHermes host", lambda: _configure_host(layout, cfg)),
         ("Writing first-boot flag", lambda: _write_firstboot()),
+        ("Creating secrets directory", lambda: _ensure_secrets_dir(PVE_ROOT_MOUNT)),
     ]
+    if dev_credentials and dev_apple_osk:
+        os_steps.append(
+            (
+                "Writing Apple OSK secret",
+                lambda: _write_apple_osk_secret(PVE_ROOT_MOUNT, dev_apple_osk),
+            )
+        )
     if not no_vm:
         seed = _write_cloud_init_seed(dev_ssh_pubkey if dev_credentials else None)
         os_steps.append(
@@ -234,6 +254,37 @@ def _setup_credentials(dev_credentials: bool, dev_ssh_pubkey: str | None = None)
             host_mod.enable_dev_root_ssh(PVE_ROOT_MOUNT, dev_ssh_pubkey)
     else:
         host_mod.lock_root_account(PVE_ROOT_MOUNT)
+
+
+def _ensure_secrets_dir(chroot_mount: str) -> str:
+    """Create <chroot>/etc/phermes/secrets/ mode 0700 and return its path."""
+    secrets_dir = os.path.join(chroot_mount, "etc/phermes/secrets")
+    os.makedirs(secrets_dir, exist_ok=True)
+    os.chmod(secrets_dir, 0o700)
+    return secrets_dir
+
+
+def _write_apple_osk_secret(chroot_mount: str, osk: str) -> None:
+    """Validate OSK and write to <chroot>/etc/phermes/secrets/apple.osk mode 0400.
+
+    Slice #5b: phermesd reads this file at macOS VM launch via
+    secrets::read_apple_osk; production builds typically leave it absent and
+    rely on the operator dropping it in post-install.
+    """
+    osk = osk.strip()
+    if len(osk) != 64:
+        raise typer.BadParameter(
+            "--dev-apple-osk must be exactly 64 characters after trim"
+        )
+    if not all(c in "0123456789abcdefABCDEF" for c in osk):
+        raise typer.BadParameter(
+            "--dev-apple-osk must be 64 hex characters [0-9a-fA-F]"
+        )
+    secrets_dir = _ensure_secrets_dir(chroot_mount)
+    osk_path = os.path.join(secrets_dir, "apple.osk")
+    with open(osk_path, "w") as f:
+        f.write(osk)
+    os.chmod(osk_path, 0o400)
 
 
 def _partition(layout) -> None:
