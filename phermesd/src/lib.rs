@@ -9,6 +9,7 @@ pub mod proto;
 pub mod qemu;
 pub mod qga;
 pub mod qmp;
+pub mod secrets;
 pub mod state;
 pub mod storage;
 pub mod supervisor;
